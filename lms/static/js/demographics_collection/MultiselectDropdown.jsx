@@ -109,7 +109,7 @@ class MultiselectDropdown extends React.Component {
         <div key={index} id={`${option.value}-option-container`} className="option-container">
           <label className="option-label">
             <input id={`${option.value}-option-checkbox`} className="option-checkbox" type="checkbox" value={option.value} checked={checked} onChange={this.handleOptionClick} />
-            {option.display_name}
+            <span className="pl-2">{option.display_name}</span>
           </label>
         </div>
       )
@@ -126,7 +126,7 @@ class MultiselectDropdown extends React.Component {
   render() {
     return (
       <div
-        className="multiselect-dropdown"
+        className="multiselect-dropdown pb-3"
         tabIndex={-1}
         onBlur={e => {
           // We need to make sure we only close and save the dropdown when
@@ -134,20 +134,18 @@ class MultiselectDropdown extends React.Component {
           // essentially what this if statement is saying:
           // if the newly focused target is NOT a child of the this element, THEN fire the onBlur function
           // and close the dropdown.
-          if(!e.currentTarget.contains(e.relatedTarget)) {
+          if (!e.currentTarget.contains(e.relatedTarget)) {
             this.props.onBlur(e);
-            this.setState({open: false})
+            this.setState({ open: false })
           }
         }}
       >
         <label id="multiselect-dropdown-label" htmlFor="multiselect-dropdown">{this.props.label}</label>
-        <div 
-          className="form-control d-flex" 
-        >
-        <button className="multiselect-dropdown-button" disabled={this.props.disabled} id="multiselect-dropdown-button" ref={this.buttonRef} aria-haspopup="true" aria-expanded={this.state.open} aria-labelledby="multiselect-dropdown-label multiselect-dropdown-button" onClick={this.handleButtonClick}>
-          {this.renderSelected()}
-        </button>
-        {this.renderUnselect()}
+        <div className="form-control d-flex">
+          <button className="multiselect-dropdown-button" disabled={this.props.disabled} id="multiselect-dropdown-button" ref={this.setButtonRef} aria-haspopup="true" aria-expanded={this.state.open} aria-labelledby="multiselect-dropdown-label multiselect-dropdown-button" onClick={this.handleButtonClick}>
+            {this.renderSelected()}
+          </button>
+          {this.renderUnselect()}
         </div>
         <div>
           {this.renderMenu()}

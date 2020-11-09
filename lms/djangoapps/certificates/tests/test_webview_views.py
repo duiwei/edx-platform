@@ -14,10 +14,11 @@ from django.test.client import Client, RequestFactory
 from django.test.utils import override_settings
 from django.urls import reverse
 from mock import patch
-from six.moves import range
-from six.moves.urllib.parse import urlencode
+from urllib.parse import urlencode
 
 from course_modes.models import CourseMode
+from edx_toggles.toggles import WaffleSwitch
+from edx_toggles.toggles.testutils import override_waffle_switch
 from lms.djangoapps.badges.events.course_complete import get_completion_badge
 from lms.djangoapps.badges.tests.factories import (
     BadgeAssertionFactory,
@@ -57,6 +58,7 @@ from util.date_utils import strftime_localized
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory
 
+AUTO_CERTIFICATE_GENERATION_SWITCH = WaffleSwitch(waffle.waffle(), waffle.AUTO_CERTIFICATE_GENERATION)
 FEATURES_WITH_CERTS_ENABLED = settings.FEATURES.copy()
 FEATURES_WITH_CERTS_ENABLED['CERTIFICATES_HTML_VIEW'] = True
 FEATURES_WITH_BADGES_ENABLED = FEATURES_WITH_CERTS_ENABLED.copy()
@@ -97,7 +99,7 @@ class CommonCertificatesTestCase(ModuleStoreTestCase):
         self.user.profile.save()
         self.client.login(username=self.user.username, password='foo')
         self.request = RequestFactory().request()
-        self.linkedin_url = u'http://www.linkedin.com/profile/add?{params}'
+        self.linkedin_url = 'https://www.linkedin.com/profile/add?startTask=CERTIFICATION_NAME&{params}'
 
         self.cert = GeneratedCertificateFactory.create(
             user=self.user,
@@ -264,14 +266,17 @@ class CertificatesViewsTests(CommonCertificatesTestCase, CacheIsolationTestCase)
         test_url = get_certificate_url(course_id=self.course.id, uuid=self.cert.verify_uuid)
         response = self.client.get(test_url)
         self.assertEqual(response.status_code, 200)
-        params = OrderedDict([
-            ('_ed', '0_0dPSPyS070e0HsE9HNz_13_d11_',),
-            ('pfCertificationName', u'{platform_name} Honor Code Certificate for {course_name}'.format(
-                platform_name=settings.PLATFORM_NAME,
-                course_name=self.course.display_name,
-            ).encode('utf-8'),),
-            ('pfCertificationUrl', self.request.build_absolute_uri(test_url),),
-        ])
+        params = {
+            'name': '{platform_name} Honor Code Certificate for {course_name}'.format(
+                platform_name=settings.PLATFORM_NAME, course_name=self.course.display_name,
+            ).encode('utf-8'),
+            'certUrl': self.request.build_absolute_uri(test_url),
+            # default value from the LinkedInAddToProfileConfigurationFactory company_identifier
+            'organizationId': 1337,
+            'certId': self.cert.verify_uuid,
+            'issueYear': self.cert.created_date.year,
+            'issueMonth': self.cert.created_date.month,
+        }
         self.assertContains(
             response,
             js_escaped_string(self.linkedin_url.format(params=urlencode(params))),
@@ -280,7 +285,7 @@ class CertificatesViewsTests(CommonCertificatesTestCase, CacheIsolationTestCase)
     @override_settings(FEATURES=FEATURES_WITH_CERTS_ENABLED)
     @with_site_configuration(
         configuration={
-            'platform_name': 'My Platform Site', 'LINKEDIN_COMPANY_ID': 'test_linkedin_my_site',
+            'platform_name': 'My Platform Site', 'LINKEDIN_COMPANY_ID': 2448,
         },
     )
     def test_linkedin_share_url_site(self):
@@ -292,13 +297,16 @@ class CertificatesViewsTests(CommonCertificatesTestCase, CacheIsolationTestCase)
         response = self.client.get(test_url, HTTP_HOST='test.localhost')
         self.assertEqual(response.status_code, 200)
         # the linkedIn share URL with appropriate parameters should be present
-        params = OrderedDict([
-            ('_ed', 'test_linkedin_my_site',),
-            ('pfCertificationName', u'My Platform Site Honor Code Certificate for {course_name}'.format(
+        params = {
+            'name': 'My Platform Site Honor Code Certificate for {course_name}'.format(
                 course_name=self.course.display_name,
-            ).encode('utf-8'),),
-            ('pfCertificationUrl', 'http://test.localhost' + test_url,),
-        ])
+            ).encode('utf-8'),
+            'certUrl': 'http://test.localhost' + test_url,
+            'organizationId': 2448,
+            'certId': self.cert.verify_uuid,
+            'issueYear': self.cert.created_date.year,
+            'issueMonth': self.cert.created_date.month,
+        }
         self.assertContains(
             response,
             js_escaped_string(self.linkedin_url.format(params=urlencode(params))),
@@ -933,7 +941,7 @@ class CertificatesViewsTests(CommonCertificatesTestCase, CacheIsolationTestCase)
             expected_date = today
         else:
             expected_date = self.course.certificate_available_date
-        with waffle.waffle().override(waffle.AUTO_CERTIFICATE_GENERATION, active=True):
+        with override_waffle_switch(AUTO_CERTIFICATE_GENERATION_SWITCH, active=True):
             response = self.client.get(test_url)
         date = u'{month} {day}, {year}'.format(
             month=strftime_localized(expected_date, "%B"),

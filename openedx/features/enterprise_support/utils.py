@@ -10,8 +10,9 @@ from django.conf import settings
 from django.urls import NoReverseMatch, reverse
 from django.utils.translation import ugettext as _
 from edx_django_utils.cache import TieredCache, get_cache_key
+from edx_toggles.toggles import WaffleFlag
 from enterprise.api.v1.serializers import EnterpriseCustomerBrandingConfigurationSerializer
-from enterprise.models import EnterpriseCustomerUser, EnterpriseCustomer
+from enterprise.models import EnterpriseCustomer, EnterpriseCustomerUser
 from social_django.models import UserSocialAuth
 
 import third_party_auth
@@ -19,7 +20,6 @@ from lms.djangoapps.branding.api import get_privacy_url
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
 from openedx.core.djangoapps.user_authn.cookies import standard_cookie_settings
 from openedx.core.djangolib.markup import HTML, Text
-from openedx.core.djangoapps.waffle_utils import WaffleFlag
 from student.helpers import get_next_url_for_login_page
 
 ENTERPRISE_HEADER_LINKS = WaffleFlag('enterprise', 'enterprise_header_links', __name__)
@@ -76,7 +76,11 @@ def get_enterprise_sidebar_context(enterprise_customer, is_proxy_login):
     """
     Get context information for enterprise sidebar for the given enterprise customer.
 
-    Enterprise Sidebar Context has the following key-value pairs.
+    Args:
+        enterprise_customer (dict): customer data from enterprise-customer endpoint, cached
+        is_proxy_login (bool): If True, use proxy login welcome template
+
+    Returns: Enterprise Sidebar Context with the following key-value pairs.
     {
         'enterprise_name': 'Enterprise Name',
         'enterprise_logo_url': 'URL of the enterprise logo image',
@@ -354,14 +358,13 @@ def get_enterprise_learner_portal(request):
 def enterprise_branding_configuration(enterprise_customer_obj):
     """
     Given an instance of ``EnterpriseCustomer``, returns a related
-    branding_configuration serialized dictionary if it exists, otherwise an empty dictionary.
-    """
-    # We can use hasattr() on one-to-one relationships to avoid exception-catching:
-    # https://docs.djangoproject.com/en/2.2/topics/db/examples/one_to_one/
-    if not hasattr(enterprise_customer_obj, 'branding_configuration'):
-        return {}
+    branding_configuration serialized dictionary if it exists, otherwise
+    the serialized default EnterpriseCustomerBrandingConfiguration object.
 
-    branding_config = enterprise_customer_obj.branding_configuration
+    EnterpriseCustomerBrandingConfigurationSerializer will use default values
+    for any empty branding config fields.
+    """
+    branding_config = enterprise_customer_obj.safe_branding_configuration
     return EnterpriseCustomerBrandingConfigurationSerializer(branding_config).data
 
 

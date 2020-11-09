@@ -74,8 +74,6 @@ FEATURES['ENABLE_DISCUSSION_SERVICE'] = False
 
 FEATURES['ENABLE_SERVICE_STATUS'] = True
 
-FEATURES['ENABLE_SHOPPING_CART'] = True
-
 FEATURES['ENABLE_VERIFIED_CERTIFICATES'] = True
 
 # Toggles embargo on for testing
@@ -277,27 +275,6 @@ OAUTH_ENFORCE_SECURE = False
 FEATURES['ENABLE_MOBILE_REST_API'] = True
 FEATURES['ENABLE_VIDEO_ABSTRACTION_LAYER_API'] = True
 
-###################### Payment ##############################3
-# Enable fake payment processing page
-FEATURES['ENABLE_PAYMENT_FAKE'] = True
-
-# Configure the payment processor to use the fake processing page
-# Since both the fake payment page and the shoppingcart app are using
-# the same settings, we can generate this randomly and guarantee
-# that they are using the same secret.
-RANDOM_SHARED_SECRET = ''.join(
-    choice(ascii_letters + digits + punctuation)
-    for x in range(250)
-)
-
-CC_PROCESSOR_NAME = 'CyberSource2'
-CC_PROCESSOR['CyberSource2']['SECRET_KEY'] = RANDOM_SHARED_SECRET
-CC_PROCESSOR['CyberSource2']['ACCESS_KEY'] = "0123456789012345678901"
-CC_PROCESSOR['CyberSource2']['PROFILE_ID'] = "edx"
-CC_PROCESSOR['CyberSource2']['PURCHASE_ENDPOINT'] = "/shoppingcart/payment_fake"
-
-FEATURES['STORE_BILLING_INFO'] = True
-
 ########################### SYSADMIN DASHBOARD ################################
 FEATURES['ENABLE_SYSADMIN_DASHBOARD'] = True
 GIT_REPO_DIR = TEST_ROOT / "course_repos"
@@ -488,8 +465,8 @@ PROFILE_IMAGE_MIN_BYTES = 100
 
 # Enable the LTI provider feature for testing
 FEATURES['ENABLE_LTI_PROVIDER'] = True
-INSTALLED_APPS.append('lti_provider.apps.LtiProviderConfig')
-AUTHENTICATION_BACKENDS.append('lti_provider.users.LtiBackend')
+INSTALLED_APPS.append('lms.djangoapps.lti_provider.apps.LtiProviderConfig')
+AUTHENTICATION_BACKENDS.append('lms.djangoapps.lti_provider.users.LtiBackend')
 
 # ORGANIZATIONS
 FEATURES['ORGANIZATIONS_APP'] = True
@@ -594,6 +571,8 @@ PDF_RECEIPT_TAX_ID_LABEL = 'Tax ID'
 PROFILE_MICROFRONTEND_URL = "http://profile-mfe/abc/"
 ORDER_HISTORY_MICROFRONTEND_URL = "http://order-history-mfe/"
 ACCOUNT_MICROFRONTEND_URL = "http://account-mfe/"
+LOGISTRATION_MICROFRONTEND_URL = "http://logistation-mfe"
+LOGISTRATION_MICROFRONTEND_DOMAIN = "logistation-mfe"
 LEARNING_MICROFRONTEND_URL = "http://learning-mfe"
 
 ########################## limiting dashboard courses ######################
@@ -608,5 +587,6 @@ RATELIMIT_RATE = '2/m'
 
 ##### LOGISTRATION RATE LIMIT SETTINGS #####
 LOGISTRATION_RATELIMIT_RATE = '5/5m'
+LOGISTRATION_API_RATELIMIT = '5/m'
 
 REGISTRATION_VALIDATION_RATELIMIT = '5/minute'

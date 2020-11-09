@@ -43,6 +43,7 @@ When refering to XBlocks, we use the entry-point name. For example,
 import importlib.util
 import os
 import sys
+
 from corsheaders.defaults import default_headers as corsheaders_default_headers
 from datetime import timedelta
 import lms.envs.common
@@ -75,6 +76,7 @@ from lms.envs.common import (
     HEARTBEAT_CHECKS,
     HEARTBEAT_EXTENDED_CHECKS,
     HEARTBEAT_CELERY_TIMEOUT,
+    HEARTBEAT_CELERY_ROUTING_KEY,
 
     # Default site to use if no site exists matching request headers
     SITE_ID,
@@ -160,6 +162,12 @@ PLATFORM_TWITTER_ACCOUNT = "@YourPlatformTwitterAccount"
 # Dummy secret key for dev/test
 SECRET_KEY = 'dev key'
 FAVICON_PATH = 'images/favicon.ico'
+
+
+# .. setting_name: STUDIO_NAME
+# .. setting_default: Your Platform Studio
+# .. setting_description: The name that will appear on the landing page of Studio, as well as in various emails and
+#   templates.
 STUDIO_NAME = _("Your Platform Studio")
 STUDIO_SHORT_NAME = _("Studio")
 FEATURES = {
@@ -341,22 +349,12 @@ FEATURES = {
     #   default because enabling allows a method to bypass password policy.
     # .. toggle_use_cases: open_edx
     # .. toggle_creation_date: 2020-02-21
+    # .. toggle_target_removal_date: None
+    # .. toggle_warnings: None
     # .. toggle_tickets: 'https://github.com/edx/edx-platform/pull/21616'
     'ENABLE_CHANGE_USER_PASSWORD_ADMIN': False,
 
     ### ORA Feature Flags ###
-
-    # .. toggle_name: ENABLE_ORA_TEAM_SUBMISSIONS
-    # .. toggle_implementation: DjangoSetting
-    # .. toggle_default: False
-    # .. toggle_description: Set to True to enable team-based ORA submissions.
-    # .. toggle_use_cases: temporary
-    # .. toggle_creation_date: 2020-03-03
-    # .. toggle_target_removal_date: None
-    # .. toggle_tickets: https://openedx.atlassian.net/browse/EDUCATOR-4951
-    # .. toggle_warnings: This temporary feature toggle does not have a target removal date.
-    'ENABLE_ORA_TEAM_SUBMISSIONS': False,
-
     # .. toggle_name: ENABLE_ORA_ALL_FILE_URLS
     # .. toggle_implementation: DjangoSetting
     # .. toggle_default: False
@@ -449,8 +447,11 @@ COURSES_ROOT = ENV_ROOT / "data"
 
 GITHUB_REPO_ROOT = ENV_ROOT / "data"
 
+# TODO: Is this next line necessary?
 sys.path.append(REPO_ROOT)
-sys.path.append(PROJECT_ROOT / 'djangoapps')
+# TODO: The next two path modifications will be removed in an upcoming Open edX release.
+# See docs/decisions/0007-sys-path-modification-removal.rst
+sys.path.append(REPO_ROOT / 'import_shims' / 'studio')
 sys.path.append(COMMON_ROOT / 'djangoapps')
 
 # For geolocation ip database
@@ -555,6 +556,7 @@ AWS_SES_REGION_NAME = 'us-east-1'
 AWS_SES_REGION_ENDPOINT = 'email.us-east-1.amazonaws.com'
 AWS_ACCESS_KEY_ID = None
 AWS_SECRET_ACCESS_KEY = None
+AWS_SECURITY_TOKEN = None
 AWS_QUERYSTRING_AUTH = False
 AWS_STORAGE_BUCKET_NAME = 'SET-ME-PLEASE (ex. bucket-name)'
 AWS_S3_CUSTOM_DOMAIN = 'SET-ME-PLEASE (ex. bucket-name.s3.amazonaws.com)'
@@ -661,7 +663,7 @@ MIDDLEWARE = [
     'edx_django_utils.monitoring.middleware.MonitoringMemoryMiddleware',
 
     # Cookie monitoring
-    'openedx.core.lib.request_utils.CookieMetricsMiddleware',
+    'openedx.core.lib.request_utils.CookieMonitoringMiddleware',
 
     'openedx.core.djangoapps.header_control.middleware.HeaderControlMiddleware',
     'django.middleware.cache.UpdateCacheMiddleware',
@@ -724,7 +726,7 @@ MIDDLEWARE = [
     # Enables force_django_cache_miss functionality for TieredCache.
     'edx_django_utils.cache.middleware.TieredCacheMiddleware',
 
-    # Outputs monitoring metrics for a request.
+    # Adds monitoring attributes to requests.
     'edx_rest_framework_extensions.middleware.RequestCustomAttributesMiddleware',
 
     'edx_rest_framework_extensions.auth.jwt.middleware.EnsureJWTAuthSettingsMiddleware',
@@ -911,6 +913,11 @@ CODE_JAIL = {
         # Needs to be non-zero so that jailed code can use it as their temp directory.(1MiB in bytes)
         'FSIZE': 1048576,
     },
+
+    # Overrides to default configurable 'limits' (above).
+    # Keys should be course run ids.
+    # Values should be dictionaries that look like 'limits'.
+    "limit_overrides": {},
 }
 
 # Some courses are allowed to run unsafe code. This is a list of regexes, one
@@ -1203,14 +1210,6 @@ WEBPACK_CONFIG_PATH = 'webpack.prod.config.js'
 
 ################################# CELERY ######################################
 
-# Auto discover tasks fails to detect contentstore tasks
-CELERY_IMPORTS = (
-    'cms.djangoapps.contentstore.tasks',
-    'openedx.core.djangoapps.bookmarks.tasks',
-    'openedx.core.djangoapps.ccxcon.tasks',
-    'openedx.core.djangoapps.programs.tasks.v1.tasks',
-)
-
 # Message configuration
 
 CELERY_TASK_SERIALIZER = 'json'
@@ -1344,19 +1343,19 @@ INSTALLED_APPS = [
     'openedx.core.djangoapps.video_pipeline',
 
     # For CMS
-    'contentstore.apps.ContentstoreConfig',
+    'cms.djangoapps.contentstore.apps.ContentstoreConfig',
 
     'openedx.core.djangoapps.contentserver',
-    'course_creators',
+    'cms.djangoapps.course_creators',
     'student.apps.StudentConfig',  # misleading name due to sharing with lms
     'openedx.core.djangoapps.course_groups',  # not used in cms (yet), but tests run
-    'xblock_config.apps.XBlockConfig',
+    'cms.djangoapps.xblock_config.apps.XBlockConfig',
 
     # New (Blockstore-based) XBlock runtime
     'openedx.core.djangoapps.xblock.apps.StudioXBlockAppConfig',
 
     # Maintenance tools
-    'maintenance',
+    'cms.djangoapps.maintenance',
     'openedx.core.djangoapps.util.apps.UtilConfig',
 
     # Tracking
@@ -1395,7 +1394,7 @@ INSTALLED_APPS = [
     # User preferences
     'wiki',
     'django_notify',
-    'course_wiki',  # Our customizations
+    'lms.djangoapps.course_wiki',  # Our customizations
     'mptt',
     'sekizai',
     'openedx.core.djangoapps.user_api',
@@ -1441,7 +1440,7 @@ INSTALLED_APPS = [
     'openedx.core.djangoapps.oauth_dispatch.apps.OAuthDispatchAppConfig',
     'lms.djangoapps.courseware',
     'lms.djangoapps.coursewarehistoryextended',
-    'survey.apps.SurveyConfig',
+    'lms.djangoapps.survey.apps.SurveyConfig',
     'lms.djangoapps.verify_student.apps.VerifyStudentConfig',
     'completion',
 
@@ -1468,7 +1467,7 @@ INSTALLED_APPS = [
     'user_tasks',
 
     # CMS specific user task handling
-    'cms_user_tasks.apps.CmsUserTasksConfig',
+    'cms.djangoapps.cms_user_tasks.apps.CmsUserTasksConfig',
 
     # Unusual migrations
     'database_fixups',
@@ -1655,6 +1654,7 @@ OPTIONAL_APPS = (
     ('integrated_channels.sap_success_factors', None),
     ('integrated_channels.xapi', None),
     ('integrated_channels.cornerstone', None),
+    ('integrated_channels.blackboard', None),
     ('integrated_channels.canvas', None),
     ('integrated_channels.moodle', None),
 )
@@ -2280,6 +2280,7 @@ DISABLE_DEPRECATED_SIGNUP_URL = False
 
 ##### LOGISTRATION RATE LIMIT SETTINGS #####
 LOGISTRATION_RATELIMIT_RATE = '100/5m'
+LOGISTRATION_API_RATELIMIT = '20/m'
 
 ##### REGISTRATION RATE LIMIT SETTINGS #####
 REGISTRATION_VALIDATION_RATELIMIT = '30/7d'

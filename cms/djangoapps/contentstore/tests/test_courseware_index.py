@@ -20,15 +20,16 @@ from search.search_engine_base import SearchEngine
 from six.moves import range
 from xblock.core import XBlock
 
-from contentstore.courseware_index import (
+from cms.djangoapps.contentstore.courseware_index import (
     CourseAboutSearchIndexer,
     CoursewareSearchIndexer,
     LibrarySearchIndexer,
     SearchIndexingError
 )
-from contentstore.signals.handlers import listen_for_course_publish, listen_for_library_update
-from contentstore.tests.utils import CourseTestCase
-from contentstore.utils import reverse_course_url, reverse_usage_url
+from cms.djangoapps.contentstore.signals.handlers import listen_for_course_publish, listen_for_library_update
+from cms.djangoapps.contentstore.tasks import update_search_index
+from cms.djangoapps.contentstore.tests.utils import CourseTestCase
+from cms.djangoapps.contentstore.utils import reverse_course_url, reverse_usage_url
 from course_modes.models import CourseMode
 from course_modes.tests.factories import CourseModeFactory
 from openedx.core.djangoapps.models.course_details import CourseDetails
@@ -54,7 +55,6 @@ from xmodule.modulestore.tests.utils import (
 from xmodule.partitions.partitions import UserPartition
 from xmodule.tests import DATA_DIR
 from xmodule.x_module import XModuleMixin
-
 
 COURSE_CHILD_STRUCTURE = {
     "course": "chapter",
@@ -754,6 +754,20 @@ class TestTaskExecution(SharedModuleStoreTestCase):
         # Note that this test will only succeed if celery is working in inline mode
         response = searcher.search(field_dictionary={"library": library_search_key})
         self.assertEqual(response["total"], 2)
+
+    def test_ignore_ccx(self):
+        """Test that we ignore CCX courses (it's too slow now)."""
+        # We're relying on our CCX short circuit to just stop execution as soon
+        # as it encounters a CCX key. If that isn't working properly, it will
+        # fall through to the normal indexing and raise an exception because
+        # there is no data or backing course behind the course key.
+        with patch('cms.djangoapps.contentstore.courseware_index.CoursewareSearchIndexer.index') as mock_index:
+            self.assertIsNone(
+                update_search_index(
+                    "ccx-v1:OpenEdX+FAKECOURSE+FAKERUN+ccx@1", "2020-09-28T16:41:57.150796"
+                )
+            )
+            self.assertFalse(mock_index.called)
 
 
 @ddt.ddt

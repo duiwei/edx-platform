@@ -12,6 +12,7 @@ from mock import patch
 from organizations.models import Organization
 
 from openedx.core.djangoapps.content_libraries.tests.base import ContentLibrariesRestApiTest, elasticsearch_test
+from openedx.core.djangoapps.content_libraries.constants import VIDEO, COMPLEX, PROBLEM, CC_4_BY, ALL_RIGHTS_RESERVED
 from student.tests.factories import UserFactory
 
 
@@ -46,7 +47,9 @@ class ContentLibrariesTest(ContentLibrariesRestApiTest):
         Test Create, Read, Update, and Delete of a Content Library
         """
         # Create:
-        lib = self._create_library(slug="lib-crud", title="A Test Library", description="Just Testing")
+        lib = self._create_library(
+            slug="lib-crud", title="A Test Library", description="Just Testing", license_type=CC_4_BY,
+        )
         expected_data = {
             "id": "lib:CL-TEST:lib-crud",
             "org": "CL-TEST",
@@ -54,6 +57,8 @@ class ContentLibrariesTest(ContentLibrariesRestApiTest):
             "title": "A Test Library",
             "description": "Just Testing",
             "version": 0,
+            "type": COMPLEX,
+            "license": CC_4_BY,
             "has_unpublished_changes": False,
             "has_unpublished_deletes": False,
         }
@@ -75,6 +80,87 @@ class ContentLibrariesTest(ContentLibrariesRestApiTest):
         # And confirm it is deleted:
         self._get_library(lib["id"], expect_response=404)
         self._delete_library(lib["id"], expect_response=404)
+
+    @ddt.data(VIDEO, PROBLEM, COMPLEX)
+    def test_library_alternative_type(self, target_type):
+        """
+        Create a library with a specific type
+        """
+        lib = self._create_library(
+            slug="some-slug", title="Video Library", description="Test Video Library", library_type=target_type,
+        )
+        expected_data = {
+            "id": "lib:CL-TEST:some-slug",
+            "org": "CL-TEST",
+            "slug": "some-slug",
+            "title": "Video Library",
+            "type": target_type,
+            "description": "Test Video Library",
+            "version": 0,
+            "has_unpublished_changes": False,
+            "has_unpublished_deletes": False,
+            "license": ALL_RIGHTS_RESERVED,
+        }
+        self.assertDictContainsEntries(lib, expected_data)
+
+    # Need to use a different slug each time here. Seems to be a race condition on test cleanup that will break things
+    # otherwise.
+    @ddt.data(
+        ('to-video-fail', COMPLEX, VIDEO, (("problem", "problemA"),), 400),
+        ('to-video-empty', COMPLEX, VIDEO, tuple(), 200),
+        ('to-problem', COMPLEX, PROBLEM, (("problem", "problemB"),), 200),
+        ('to-problem-fail', COMPLEX, PROBLEM, (("video", "videoA"),), 400),
+        ('to-problem-empty', COMPLEX, PROBLEM, tuple(), 200),
+        ('to-complex-from-video', VIDEO, COMPLEX, (("video", "videoB"),), 200),
+        ('to-complex-from-problem', PROBLEM, COMPLEX, (("problem", "problemC"),), 200),
+        ('to-complex-from-problem-empty', PROBLEM, COMPLEX, tuple(), 200),
+        ('to-problem-from-video-empty', PROBLEM, VIDEO, tuple(), 200),
+    )
+    @ddt.unpack
+    def test_library_update_type_conversion(self, slug, start_type, target_type, xblock_specs, expect_response):
+        """
+        Test conversion of one library type to another. Restricts options based on type/block matching.
+        """
+        lib = self._create_library(
+            slug=slug, title="A Test Library", description="Just Testing", library_type=start_type,
+        )
+        self.assertEqual(lib['type'], start_type)
+        for block_type, block_slug in xblock_specs:
+            self._add_block_to_library(lib['id'], block_type, block_slug)
+        self._commit_library_changes(lib['id'])
+        result = self._update_library(lib['id'], type=target_type, expect_response=expect_response)
+        if expect_response == 200:
+            self.assertEqual(result['type'], target_type)
+            self.assertIn('type', result)
+        else:
+            lib = self._get_library(lib['id'])
+            self.assertEqual(lib['type'], start_type)
+
+    def test_no_convert_on_unpublished(self):
+        """
+        Verify that you can't change a library's type, even if it would normally be valid,
+        when there are unpublished changes. This is so that a reversion of blocks won't cause an inconsistency.
+        """
+        lib = self._create_library(
+            slug='resolute', title="A complex library", description="Unconvertable", library_type=COMPLEX,
+        )
+        self._add_block_to_library(lib['id'], "video", 'vid-block')
+        result = self._update_library(lib['id'], type=VIDEO, expect_response=400)
+        self.assertIn('type', result)
+
+    def test_no_convert_on_pending_deletes(self):
+        """
+        Verify that you can't change a library's type, even if it would normally be valid,
+        when there are unpublished changes. This is so that a reversion of blocks won't cause an inconsistency.
+        """
+        lib = self._create_library(
+            slug='still-alive', title="A complex library", description="Unconvertable", library_type=COMPLEX,
+        )
+        block = self._add_block_to_library(lib['id'], "video", 'vid-block')
+        self._commit_library_changes(lib['id'])
+        self._delete_library_block(block['id'])
+        result = self._update_library(lib['id'], type=VIDEO, expect_response=400)
+        self.assertIn('type', result)
 
     def test_library_validation(self):
         """
@@ -133,24 +219,30 @@ class ContentLibrariesTest(ContentLibrariesRestApiTest):
         Test the filters in the list libraries API
         """
         with override_settings(FEATURES={**settings.FEATURES, 'ENABLE_CONTENT_LIBRARY_INDEX': is_indexing_enabled}):
-            self._create_library(slug="test-lib1", title="Foo", description="Bar")
+            self._create_library(slug="test-lib1", title="Foo", description="Bar", library_type=VIDEO)
             self._create_library(slug="test-lib2", title="Library-Title-2", description="Bar2")
-            self._create_library(slug="l3", title="Library-Title-3", description="Description")
+            self._create_library(slug="l3", title="Library-Title-3", description="Description", library_type=VIDEO)
 
             Organization.objects.get_or_create(
                 short_name="org-test",
                 defaults={"name": "Content Libraries Tachyon Exploration & Survey Team"},
             )
-            self._create_library(slug="l4", title="Library-Title-4", description="Library-Description", org='org-test')
+            self._create_library(
+                slug="l4", title="Library-Title-4", description="Library-Description", org='org-test',
+                library_type=VIDEO,
+            )
             self._create_library(slug="l5", title="Library-Title-5", description="Library-Description", org='org-test')
 
             self.assertEqual(len(self._list_libraries()), 5)
             self.assertEqual(len(self._list_libraries({'org': 'org-test'})), 2)
             self.assertEqual(len(self._list_libraries({'text_search': 'test-lib'})), 2)
+            self.assertEqual(len(self._list_libraries({'text_search': 'test-lib', 'type': VIDEO})), 1)
             self.assertEqual(len(self._list_libraries({'text_search': 'library-title'})), 4)
+            self.assertEqual(len(self._list_libraries({'text_search': 'library-title', 'type': VIDEO})), 2)
             self.assertEqual(len(self._list_libraries({'text_search': 'bar'})), 2)
             self.assertEqual(len(self._list_libraries({'text_search': 'org-tes'})), 2)
             self.assertEqual(len(self._list_libraries({'org': 'org-test', 'text_search': 'library-title-4'})), 1)
+            self.assertEqual(len(self._list_libraries({'type': VIDEO})), 3)
 
     # General Content Library XBlock tests:
 
@@ -284,14 +376,47 @@ class ContentLibrariesTest(ContentLibrariesRestApiTest):
         with override_settings(FEATURES={**settings.FEATURES, 'ENABLE_CONTENT_LIBRARY_INDEX': is_indexing_enabled}):
             lib = self._create_library(slug="test-lib-blocks" + str(is_indexing_enabled), title="Title")
             block1 = self._add_block_to_library(lib["id"], "problem", "foo-bar")
+            self._add_block_to_library(lib["id"], "video", "vid-baz")
+            self._add_block_to_library(lib["id"], "html", "html-baz")
             self._add_block_to_library(lib["id"], "problem", "foo-baz")
             self._add_block_to_library(lib["id"], "problem", "bar-baz")
 
             self._set_library_block_olx(block1["id"], "<problem display_name=\"DisplayName\"></problem>")
 
-            self.assertEqual(len(self._get_library_blocks(lib["id"])), 3)
+            self.assertEqual(len(self._get_library_blocks(lib["id"])), 5)
             self.assertEqual(len(self._get_library_blocks(lib["id"], {'text_search': 'Foo'})), 2)
             self.assertEqual(len(self._get_library_blocks(lib["id"], {'text_search': 'Display'})), 1)
+            self.assertEqual(len(self._get_library_blocks(lib["id"], {'text_search': 'Video'})), 1)
+            self.assertEqual(len(self._get_library_blocks(lib["id"], {'text_search': 'Foo', 'block_type': 'video'})), 0)
+            self.assertEqual(len(self._get_library_blocks(lib["id"], {'text_search': 'Baz', 'block_type': 'video'})), 1)
+            self.assertEqual(len(
+                self._get_library_blocks(lib["id"], {'text_search': 'Baz', 'block_type': ['video', 'html']})),
+                2,
+            )
+            self.assertEqual(len(self._get_library_blocks(lib["id"], {'block_type': 'video'})), 1)
+            self.assertEqual(len(self._get_library_blocks(lib["id"], {'block_type': 'problem'})), 3)
+            self.assertEqual(len(self._get_library_blocks(lib["id"], {'block_type': 'squirrel'})), 0)
+
+    @ddt.data(
+        ('video-problem', VIDEO, 'problem', 400),
+        ('video-video', VIDEO, 'video', 200),
+        ('problem-problem', PROBLEM, 'problem', 200),
+        ('problem-video', PROBLEM, 'video', 400),
+        ('complex-video', COMPLEX, 'video', 200),
+        ('complex-problem', COMPLEX, 'problem', 200),
+    )
+    @ddt.unpack
+    def test_library_blocks_type_constrained(self, slug, library_type, block_type, expect_response):
+        """
+        Test that type-constrained libraries enforce their constraint when adding an XBlock.
+        """
+        lib = self._create_library(
+            slug=slug, title="A Test Library", description="Testing XBlocks", library_type=library_type,
+        )
+        lib_id = lib["id"]
+
+        # Add a 'problem' XBlock to the library:
+        self._add_block_to_library(lib_id, block_type, 'test-block', expect_response=expect_response)
 
     def test_library_blocks_with_hierarchy(self):
         """
@@ -392,8 +517,6 @@ class ContentLibrariesTest(ContentLibrariesRestApiTest):
                 {"username": author.username, "group_name": None, "access_level": "author"},
                 reader_grant,
             ]
-            from pprint import pprint
-            pprint(team_response)
             for entry, expected in zip(team_response, expected_response):
                 self.assertDictContainsEntries(entry, expected)
 
@@ -612,3 +735,21 @@ class ContentLibrariesTest(ContentLibrariesRestApiTest):
             self._add_block_to_library(lib_id, "problem", "problem1", expect_response=400)
             # Also check that limit applies to child blocks too
             self._add_block_to_library(lib_id, "html", "html1", parent_block=block_data['id'], expect_response=400)
+
+    @ddt.data(
+        ('complex-types', COMPLEX, False),
+        ('video-types', VIDEO, True),
+        ('problem-types', PROBLEM, True),
+    )
+    @ddt.unpack
+    def test_block_types(self, slug, library_type, constrained):
+        """
+        Test that the permitted block types listing for a library change based on type.
+        """
+        lib = self._create_library(slug=slug, title='Test Block Types', library_type=library_type)
+        types = self._get_library_block_types(lib['id'])
+        if constrained:
+            self.assertEqual(len(types), 1)
+            self.assertEqual(types[0]['block_type'], library_type)
+        else:
+            self.assertGreater(len(types), 1)

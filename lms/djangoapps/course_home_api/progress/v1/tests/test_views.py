@@ -3,15 +3,14 @@ Tests for Progress Tab API in the Course Home API
 """
 
 import ddt
-
 from django.urls import reverse
 
 from course_modes.models import CourseMode
+from edx_toggles.toggles.testutils import override_waffle_flag
 from lms.djangoapps.course_home_api.tests.utils import BaseCourseHomeTests
 from lms.djangoapps.course_home_api.toggles import COURSE_HOME_MICROFRONTEND
 from lms.djangoapps.verify_student.models import ManualVerification
 from openedx.core.djangoapps.user_api.preferences.api import set_user_preference
-from openedx.core.djangoapps.waffle_utils.testutils import override_waffle_flag
 from student.models import CourseEnrollment
 from student.tests.factories import UserFactory
 
@@ -46,6 +45,9 @@ class ProgressTabTestViews(BaseCourseHomeTests):
             ManualVerification.objects.create(user=self.user, status='approved')
             response = self.client.get(self.url)
             self.assertEqual(response.data['verification_data']['status'], 'approved')
+            self.assertIsNone(response.data['certificate_data'])
+        elif enrollment_mode == CourseMode.AUDIT:
+            self.assertEqual(response.data['certificate_data']['cert_status'], 'audit_passing')
 
     def test_get_authenticated_user_not_enrolled(self):
         response = self.client.get(self.url)

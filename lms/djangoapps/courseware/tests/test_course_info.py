@@ -14,16 +14,17 @@ from django.conf import settings
 from django.http import QueryDict
 from django.test.utils import override_settings
 from django.urls import reverse
-from pyquery import PyQuery as pq
+from edx_toggles.toggles.testutils import override_waffle_flag
 from six import text_type
 
 from lms.djangoapps.ccx.tests.factories import CcxFactory
 from openedx.core.djangoapps.self_paced.models import SelfPacedConfiguration
 from openedx.core.djangoapps.site_configuration.tests.test_util import with_site_configuration_context
-from openedx.core.djangoapps.waffle_utils.testutils import WAFFLE_TABLES, override_waffle_flag
+from openedx.core.djangoapps.waffle_utils.testutils import WAFFLE_TABLES
 from openedx.features.content_type_gating.models import ContentTypeGatingConfig
-from openedx.features.course_experience import UNIFIED_COURSE_TAB_FLAG
+from openedx.features.course_experience import DISABLE_UNIFIED_COURSE_TAB_FLAG
 from openedx.features.enterprise_support.tests.mixins.enterprise import EnterpriseTestConsentRequired
+from pyquery import PyQuery as pq
 from student.models import CourseEnrollment
 from student.tests.factories import AdminFactory
 from util.date_utils import strftime_localized
@@ -42,7 +43,7 @@ from .helpers import LoginEnrollmentTestCase
 QUERY_COUNT_TABLE_BLACKLIST = WAFFLE_TABLES
 
 
-@override_waffle_flag(UNIFIED_COURSE_TAB_FLAG, active=False)
+@override_waffle_flag(DISABLE_UNIFIED_COURSE_TAB_FLAG, active=True)
 class CourseInfoTestCase(EnterpriseTestConsentRequired, LoginEnrollmentTestCase, SharedModuleStoreTestCase):
     """
     Tests for the Course Info page
@@ -154,7 +155,7 @@ class CourseInfoTestCase(EnterpriseTestConsentRequired, LoginEnrollmentTestCase,
         self.assertEqual(response.status_code, 404)
 
 
-@override_waffle_flag(UNIFIED_COURSE_TAB_FLAG, active=False)
+@override_waffle_flag(DISABLE_UNIFIED_COURSE_TAB_FLAG, active=True)
 class CourseInfoLastAccessedTestCase(LoginEnrollmentTestCase, ModuleStoreTestCase):
     """
     Tests of the CourseInfo last accessed link.
@@ -222,7 +223,7 @@ class CourseInfoLastAccessedTestCase(LoginEnrollmentTestCase, ModuleStoreTestCas
         self.assertEqual(resume_course_url, section_url)
 
 
-@override_waffle_flag(UNIFIED_COURSE_TAB_FLAG, active=False)
+@override_waffle_flag(DISABLE_UNIFIED_COURSE_TAB_FLAG, active=True)
 @ddt.ddt
 class CourseInfoTitleTestCase(LoginEnrollmentTestCase, ModuleStoreTestCase):
     """
@@ -314,7 +315,7 @@ class CourseInfoTitleTestCase(LoginEnrollmentTestCase, ModuleStoreTestCase):
             )
 
 
-@override_waffle_flag(UNIFIED_COURSE_TAB_FLAG, active=False)
+@override_waffle_flag(DISABLE_UNIFIED_COURSE_TAB_FLAG, active=True)
 class CourseInfoTestCaseCCX(SharedModuleStoreTestCase, LoginEnrollmentTestCase):
     """
     Test for unenrolled student tries to access ccx.
@@ -337,8 +338,8 @@ class CourseInfoTestCaseCCX(SharedModuleStoreTestCase, LoginEnrollmentTestCase):
 
     def test_redirect_to_dashboard_unenrolled_ccx(self):
         """
-        Assert that when unenroll student tries to access ccx do not allow him self-register.
-        Redirect him to his student dashboard
+        Assert that when unenroll student tries to access ccx do not allow them self-register.
+        Redirect them to their student dashboard
         """
         # create ccx
         ccx = CcxFactory(course_id=self.course.id, coach=self.coach)
@@ -351,7 +352,7 @@ class CourseInfoTestCaseCCX(SharedModuleStoreTestCase, LoginEnrollmentTestCase):
         self.assertRedirects(response, expected, status_code=302, target_status_code=200)
 
 
-@override_waffle_flag(UNIFIED_COURSE_TAB_FLAG, active=False)
+@override_waffle_flag(DISABLE_UNIFIED_COURSE_TAB_FLAG, active=True)
 class CourseInfoTestCaseXML(LoginEnrollmentTestCase, ModuleStoreTestCase):
     """
     Tests for the Course Info page for an XML course
@@ -398,7 +399,7 @@ class CourseInfoTestCaseXML(LoginEnrollmentTestCase, ModuleStoreTestCase):
 
 
 @override_settings(FEATURES=dict(settings.FEATURES, EMBARGO=False))
-@override_waffle_flag(UNIFIED_COURSE_TAB_FLAG, active=False)
+@override_waffle_flag(DISABLE_UNIFIED_COURSE_TAB_FLAG, active=True)
 class SelfPacedCourseInfoTestCase(LoginEnrollmentTestCase, SharedModuleStoreTestCase):
     """
     Tests for the info page of self-paced courses.
@@ -431,8 +432,8 @@ class SelfPacedCourseInfoTestCase(LoginEnrollmentTestCase, SharedModuleStoreTest
 
     def test_num_queries_instructor_paced(self):
         # TODO: decrease query count as part of REVO-28
-        self.fetch_course_info_with_queries(self.instructor_paced_course, 42, 3)
+        self.fetch_course_info_with_queries(self.instructor_paced_course, 43, 3)
 
     def test_num_queries_self_paced(self):
         # TODO: decrease query count as part of REVO-28
-        self.fetch_course_info_with_queries(self.self_paced_course, 42, 3)
+        self.fetch_course_info_with_queries(self.self_paced_course, 43, 3)

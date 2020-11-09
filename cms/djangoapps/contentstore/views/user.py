@@ -11,7 +11,7 @@ from django.views.decorators.http import require_http_methods, require_POST
 from opaque_keys.edx.keys import CourseKey
 from opaque_keys.edx.locator import LibraryLocator
 
-from course_creators.views import user_requested_access
+from cms.djangoapps.course_creators.views import user_requested_access
 from edxmako.shortcuts import render_to_response
 from student import auth
 from student.auth import STUDIO_EDIT_ROLES, STUDIO_VIEW_USERS, get_user_permissions
@@ -161,7 +161,7 @@ def _course_team_user(request, course_key, email):
     # can't modify an inactive user but can remove it
     if not (user.is_active or new_role is None):
         msg = {
-            "error": _(u'User {email} has registered but has not yet activated his/her account.').format(email=email),
+            "error": _(u'User {email} has registered but has not yet activated their account.').format(email=email),
         }
         return JsonResponse(msg, 400)
 

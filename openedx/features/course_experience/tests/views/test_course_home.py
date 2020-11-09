@@ -14,18 +14,17 @@ from django.http import QueryDict
 from django.urls import reverse
 from django.utils.http import urlquote_plus
 from django.utils.timezone import now
+from edx_toggles.toggles.testutils import override_waffle_flag
 from pytz import UTC
 from waffle.models import Flag
 from waffle.testutils import override_flag
 
 from course_modes.models import CourseMode
 from course_modes.tests.factories import CourseModeFactory
-from lms.djangoapps.courseware.tests.helpers import get_expiration_banner_text
-from experiments.models import ExperimentData
+from lms.djangoapps.experiments.models import ExperimentData
 from lms.djangoapps.commerce.models import CommerceConfiguration
 from lms.djangoapps.commerce.utils import EcommerceService
 from lms.djangoapps.course_goals.api import add_course_goal, remove_course_goal
-from lms.djangoapps.courseware.utils import verified_upgrade_deadline_link
 from lms.djangoapps.courseware.tests.factories import (
     BetaTesterFactory,
     GlobalStaffFactory,
@@ -34,9 +33,9 @@ from lms.djangoapps.courseware.tests.factories import (
     OrgStaffFactory,
     StaffFactory
 )
+from lms.djangoapps.courseware.tests.helpers import get_expiration_banner_text
+from lms.djangoapps.courseware.utils import verified_upgrade_deadline_link
 from lms.djangoapps.discussion.django_comment_client.tests.factories import RoleFactory
-from openedx.features.discounts.applicability import get_discount_expiration_date
-from openedx.features.discounts.utils import format_strikeout_price, REV1008_EXPERIMENT_ID
 from openedx.core.djangoapps.content.course_overviews.models import CourseOverview
 from openedx.core.djangoapps.dark_lang.models import DarkLangConfig
 from openedx.core.djangoapps.django_comment_common.models import (
@@ -46,16 +45,17 @@ from openedx.core.djangoapps.django_comment_common.models import (
     FORUM_ROLE_MODERATOR
 )
 from openedx.core.djangoapps.schedules.tests.factories import ScheduleFactory
-from openedx.core.djangoapps.waffle_utils.testutils import WAFFLE_TABLES, override_waffle_flag
+from openedx.core.djangoapps.waffle_utils.testutils import WAFFLE_TABLES
 from openedx.core.djangolib.markup import HTML
 from openedx.features.course_duration_limits.models import CourseDurationLimitConfig
 from openedx.features.course_experience import (
     COURSE_ENABLE_UNENROLLED_ACCESS_FLAG,
-    RELATIVE_DATES_FLAG,
+    DISABLE_UNIFIED_COURSE_TAB_FLAG,
     SHOW_REVIEWS_TOOL_FLAG,
-    SHOW_UPGRADE_MSG_ON_COURSE_HOME,
-    UNIFIED_COURSE_TAB_FLAG
+    SHOW_UPGRADE_MSG_ON_COURSE_HOME
 )
+from openedx.features.discounts.applicability import get_discount_expiration_date
+from openedx.features.discounts.utils import REV1008_EXPERIMENT_ID, format_strikeout_price
 from student.models import CourseEnrollment, FBEEnrollmentExclusion
 from student.tests.factories import UserFactory
 from util.date_utils import strftime_localized
@@ -186,7 +186,7 @@ class TestCourseHomePage(CourseHomePageTestCase):
         response = self.client.get(url)
         self.assertContains(response, TEST_WELCOME_MESSAGE, status_code=200)
 
-    @override_waffle_flag(UNIFIED_COURSE_TAB_FLAG, active=False)
+    @override_waffle_flag(DISABLE_UNIFIED_COURSE_TAB_FLAG, active=True)
     def test_welcome_message_when_not_unified(self):
         # Create a welcome message
         create_course_update(self.course, self.user, TEST_WELCOME_MESSAGE)
@@ -219,7 +219,7 @@ class TestCourseHomePage(CourseHomePageTestCase):
 
         # Fetch the view and verify the query counts
         # TODO: decrease query count as part of REVO-28
-        with self.assertNumQueries(72, table_blacklist=QUERY_COUNT_TABLE_BLACKLIST):
+        with self.assertNumQueries(73, table_blacklist=QUERY_COUNT_TABLE_BLACKLIST):
             with check_mongo_calls(4):
                 url = course_home_url(self.course)
                 self.client.get(url)
@@ -344,7 +344,7 @@ class TestCourseHomePageAccess(CourseHomePageTestCase):
                     self.assertContains(private_response,
                                         'You must be enrolled in the course to see course content.')
 
-    @override_waffle_flag(UNIFIED_COURSE_TAB_FLAG, active=False)
+    @override_waffle_flag(DISABLE_UNIFIED_COURSE_TAB_FLAG, active=True)
     @override_waffle_flag(SHOW_REVIEWS_TOOL_FLAG, active=True)
     @ddt.data(
         [CourseUserType.ANONYMOUS, 'To see course content'],
@@ -1020,9 +1020,10 @@ class CourseHomeFragmentViewTests(ModuleStoreTestCase):
         mock.Mock(return_value=(HTML("<span>DISCOUNT_PRICE</span>"), True))
     )
     def test_upgrade_message_discount(self):
+        # pylint: disable=no-member
         CourseEnrollment.enroll(self.user, self.course.id, CourseMode.AUDIT)
 
-        with SHOW_UPGRADE_MSG_ON_COURSE_HOME.override(True):
+        with override_waffle_flag(SHOW_UPGRADE_MSG_ON_COURSE_HOME, True):
             response = self.client.get(self.url)
 
         self.assertContains(response, "<span>DISCOUNT_PRICE</span>")

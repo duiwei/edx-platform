@@ -77,7 +77,7 @@ from openedx.core.djangoapps.util.testing import ContentGroupTestCase, TestCondi
 from openedx.core.lib.teams_config import TeamsConfig
 from student.models import ALLOWEDTOENROLL_TO_ENROLLED, CourseEnrollment, CourseEnrollmentAllowed, ManualEnrollmentAudit
 from student.tests.factories import CourseEnrollmentFactory, UserFactory
-from survey.models import SurveyAnswer, SurveyForm
+from lms.djangoapps.survey.models import SurveyAnswer, SurveyForm
 from xmodule.modulestore import ModuleStoreEnum
 from xmodule.modulestore.tests.django_utils import SharedModuleStoreTestCase
 from xmodule.modulestore.tests.factories import CourseFactory, ItemFactory, check_mongo_calls
@@ -1173,7 +1173,6 @@ class TestCourseSurveyReport(TestReportMixin, InstructorTaskCourseTestCase):
             )
         self.assertDictContainsSubset({'attempted': 2, 'succeeded': 2, 'failed': 0}, result)
 
-    @patch.dict('django.conf.settings.FEATURES', {'ENABLE_PAID_COURSE_REGISTRATION': True})
     def test_generate_course_survey_report(self):
         """
         test to generate course survey report

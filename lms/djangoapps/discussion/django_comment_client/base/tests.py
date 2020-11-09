@@ -405,8 +405,8 @@ class ViewsQueryCountTestCase(
         return inner
 
     @ddt.data(
-        (ModuleStoreEnum.Type.mongo, 3, 4, 38),
-        (ModuleStoreEnum.Type.split, 3, 13, 38),
+        (ModuleStoreEnum.Type.mongo, 3, 4, 39),
+        (ModuleStoreEnum.Type.split, 3, 13, 39),
     )
     @ddt.unpack
     @count_queries
@@ -414,8 +414,8 @@ class ViewsQueryCountTestCase(
         self.create_thread_helper(mock_request)
 
     @ddt.data(
-        (ModuleStoreEnum.Type.mongo, 3, 3, 34),
-        (ModuleStoreEnum.Type.split, 3, 10, 34),
+        (ModuleStoreEnum.Type.mongo, 3, 3, 35),
+        (ModuleStoreEnum.Type.split, 3, 10, 35),
     )
     @ddt.unpack
     @count_queries
@@ -1517,7 +1517,7 @@ class TeamsPermissionsTestCase(ForumsEnableMixin, UrlResetMixin, SharedModuleSto
         self.client.login(username=user.username, password=self.password)
 
     @ddt.data(
-        # student_in_team will be able to update his own post, regardless of team membership
+        # student_in_team will be able to update their own post, regardless of team membership
         ('student_in_team', 'student_in_team', 'team_commentable_id', 200, CourseDiscussionSettings.NONE),
         ('student_in_team', 'student_in_team', 'course_commentable_id', 200, CourseDiscussionSettings.NONE),
         # students can only update their own posts

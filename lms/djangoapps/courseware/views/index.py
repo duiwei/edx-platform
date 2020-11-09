@@ -8,7 +8,6 @@ View for Courseware Index
 import logging
 
 import six
-from six.moves import urllib
 from django.conf import settings
 from django.contrib.auth.views import redirect_to_login
 from django.db import transaction
@@ -21,9 +20,11 @@ from django.utils.translation import ugettext as _
 from django.views.decorators.cache import cache_control
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.generic import View
-from edx_django_utils.monitoring import set_custom_metrics_for_course_key
+from edx_django_utils.monitoring import set_custom_attributes_for_course_key
+from edx_toggles.toggles import WaffleSwitchNamespace
 from opaque_keys import InvalidKeyError
 from opaque_keys.edx.keys import CourseKey, UsageKey
+from six.moves import urllib
 from web_fragments.fragment import Fragment
 
 from edxmako.shortcuts import render_to_response, render_to_string
@@ -36,13 +37,12 @@ from openedx.core.djangoapps.crawlers.models import CrawlersConfig
 from openedx.core.djangoapps.lang_pref import LANGUAGE_KEY
 from openedx.core.djangoapps.user_api.preferences.api import get_user_preference
 from openedx.core.djangoapps.util.user_messages import PageLevelMessages
-from openedx.core.djangoapps.waffle_utils import WaffleSwitchNamespace
 from openedx.core.djangolib.markup import HTML, Text
 from openedx.features.course_experience import (
     COURSE_ENABLE_UNENROLLED_ACCESS_FLAG,
-    COURSE_OUTLINE_PAGE_FLAG,
-    default_course_url_name,
+    DISABLE_COURSE_OUTLINE_PAGE_FLAG,
     RELATIVE_DATES_FLAG,
+    default_course_url_name
 )
 from openedx.features.course_experience.urls import COURSE_HOME_VIEW_NAME
 from openedx.features.course_experience.views.course_sock import CourseSockFragmentView
@@ -55,12 +55,7 @@ from xmodule.x_module import PUBLIC_VIEW, STUDENT_VIEW
 
 from ..access import has_access
 from ..access_utils import check_public_access
-from ..courses import (
-    check_course_access_with_redirect,
-    get_course_with_access,
-    get_current_child,
-    get_studio_url
-)
+from ..courses import check_course_access_with_redirect, get_course_with_access, get_current_child, get_studio_url
 from ..entrance_exams import (
     course_has_entrance_exam,
     get_entrance_exam_content,
@@ -71,14 +66,9 @@ from ..masquerade import check_content_start_date_for_masquerade_user, setup_mas
 from ..model_data import FieldDataCache
 from ..module_render import get_module_for_descriptor, toc_for_course
 from ..permissions import MASQUERADE_AS_STUDENT
-from ..toggles import (
-    COURSEWARE_MICROFRONTEND_COURSE_TEAM_PREVIEW,
-    REDIRECT_TO_COURSEWARE_MICROFRONTEND,
-)
+from ..toggles import COURSEWARE_MICROFRONTEND_COURSE_TEAM_PREVIEW, REDIRECT_TO_COURSEWARE_MICROFRONTEND
 from ..url_helpers import get_microfrontend_url
-
 from .views import CourseTabView
-
 
 log = logging.getLogger("edx.courseware.views.index")
 
@@ -134,7 +124,7 @@ class CoursewareIndex(View):
         self.url = request.path
 
         try:
-            set_custom_metrics_for_course_key(self.course_key)
+            set_custom_attributes_for_course_key(self.course_key)
             self._clean_position()
             with modulestore().bulk_operations(self.course_key):
 
@@ -454,7 +444,7 @@ class CoursewareIndex(View):
             'disable_optimizely': not WaffleSwitchNamespace('RET').is_enabled('enable_optimizely_in_courseware'),
             'section_title': None,
             'sequence_title': None,
-            'disable_accordion': COURSE_OUTLINE_PAGE_FLAG.is_enabled(self.course.id),
+            'disable_accordion': not DISABLE_COURSE_OUTLINE_PAGE_FLAG.is_enabled(self.course.id),
             'show_search': show_search,
         }
         courseware_context.update(

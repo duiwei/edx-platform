@@ -24,6 +24,7 @@ from openedx.core.djangoapps.content_libraries.serializers import (
     ContentLibraryUpdateSerializer,
     ContentLibraryPermissionLevelSerializer,
     ContentLibraryPermissionSerializer,
+    ContentLibraryFilterSerializer,
     LibraryXBlockCreationSerializer,
     LibraryXBlockMetadataSerializer,
     LibraryXBlockTypeSerializer,
@@ -119,11 +120,14 @@ class LibraryRootView(APIView):
         """
         Return a list of all content libraries that the user has permission to view.
         """
-        org = request.query_params.get('org', None)
-        text_search = request.query_params.get('text_search', None)
+        serializer = ContentLibraryFilterSerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        org = serializer.validated_data['org']
+        library_type = serializer.validated_data['type']
+        text_search = serializer.validated_data['text_search']
 
         paginator = LibraryApiPagination()
-        queryset = api.get_libraries_for_user(request.user, org=org)
+        queryset = api.get_libraries_for_user(request.user, org=org, library_type=library_type)
         if text_search:
             result = api.get_metadata_from_index(queryset, text_search=text_search)
             result = paginator.paginate_queryset(result, request)
@@ -147,7 +151,11 @@ class LibraryRootView(APIView):
             raise PermissionDenied
         serializer = ContentLibraryMetadataSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        data = serializer.validated_data
+        data = dict(serializer.validated_data)
+        # Converting this over because using the reserved names 'type' and 'license' would shadow the built-in
+        # definitions elsewhere.
+        data['library_type'] = data.pop('type')
+        data['library_license'] = data.pop('license')
         # Get the organization short_name out of the "key.org" pseudo-field that the serializer added:
         org_name = data["key"]["org"]
         # Move "slug" out of the "key.slug" pseudo-field that the serializer added:
@@ -189,7 +197,16 @@ class LibraryDetailsView(APIView):
         api.require_permission_for_library_key(key, request.user, permissions.CAN_EDIT_THIS_CONTENT_LIBRARY)
         serializer = ContentLibraryUpdateSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
-        api.update_library(key, **serializer.validated_data)
+        data = dict(serializer.validated_data)
+        # Prevent ourselves from shadowing global names.
+        if 'type' in data:
+            data['library_type'] = data.pop('type')
+        if 'license' in data:
+            data['library_license'] = data.pop('license')
+        try:
+            api.update_library(key, **data)
+        except api.IncompatibleTypesError as err:
+            raise ValidationError({'type': str(err)})
         result = api.get_library(key)
         return Response(ContentLibraryMetadataSerializer(result).data)
 
@@ -468,6 +485,12 @@ class LibraryBlocksView(APIView):
                 str,
                 description="The string used to filter libraries by searching in title, id, org, or description",
             ),
+            apidocs.query_parameter(
+                'block_type',
+                str,
+                description="The block type to search for. If omitted or blank, searches for all types. "
+                            "May be specified multiple times to match multiple types."
+            )
         ],
     )
     @convert_exceptions
@@ -477,9 +500,10 @@ class LibraryBlocksView(APIView):
         """
         key = LibraryLocatorV2.from_string(lib_key_str)
         text_search = request.query_params.get('text_search', None)
+        block_types = request.query_params.getlist('block_type') or None
 
         api.require_permission_for_library_key(key, request.user, permissions.CAN_VIEW_THIS_CONTENT_LIBRARY)
-        result = api.get_library_blocks(key, text_search=text_search)
+        result = api.get_library_blocks(key, text_search=text_search, block_types=block_types)
 
         # Verify `pagination` param to maintain compatibility with older
         # non pagination-aware clients
@@ -509,7 +533,12 @@ class LibraryBlocksView(APIView):
             result = api.create_library_block_child(parent_block_usage, **serializer.validated_data)
         else:
             # Create a new regular top-level block:
-            result = api.create_library_block(library_key, **serializer.validated_data)
+            try:
+                result = api.create_library_block(library_key, **serializer.validated_data)
+            except api.IncompatibleTypesError as err:
+                raise ValidationError(
+                    detail={'block_type': str(err)},
+                )
         return Response(LibraryXBlockMetadataSerializer(result).data)
 
 

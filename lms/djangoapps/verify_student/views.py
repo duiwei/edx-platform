@@ -11,7 +11,6 @@ import six
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.contrib.staticfiles.storage import staticfiles_storage
-from django.core.mail import send_mail
 from django.db import transaction
 from django.http import Http404, HttpResponse, HttpResponseBadRequest
 from django.shortcuts import redirect
@@ -31,7 +30,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from course_modes.models import CourseMode
-from edxmako.shortcuts import render_to_response, render_to_string
+from edxmako.shortcuts import render_to_response
 from lms.djangoapps.commerce.utils import EcommerceService, is_account_activation_requirement_disabled
 from lms.djangoapps.verify_student.emails import send_verification_approved_email, send_verification_confirmation_email
 from lms.djangoapps.verify_student.image import InvalidImageData, decode_image_data
@@ -50,7 +49,6 @@ from student.models import CourseEnrollment
 from track import segment
 from util.db import outer_atomic
 from util.json_request import JsonResponse
-from verify_student.toggles import use_new_templates_for_id_verification_emails
 from xmodule.modulestore.django import modulestore
 
 from .services import IDVerificationService
@@ -116,7 +114,6 @@ class PayAndVerifyView(View):
     #
     INTRO_STEP = 'intro-step'
     MAKE_PAYMENT_STEP = 'make-payment-step'
-    PAYMENT_CONFIRMATION_STEP = 'payment-confirmation-step'
     FACE_PHOTO_STEP = 'face-photo-step'
     ID_PHOTO_STEP = 'id-photo-step'
     REVIEW_PHOTOS_STEP = 'review-photos-step'
@@ -125,7 +122,6 @@ class PayAndVerifyView(View):
     ALL_STEPS = [
         INTRO_STEP,
         MAKE_PAYMENT_STEP,
-        PAYMENT_CONFIRMATION_STEP,
         FACE_PHOTO_STEP,
         ID_PHOTO_STEP,
         REVIEW_PHOTOS_STEP,
@@ -134,7 +130,6 @@ class PayAndVerifyView(View):
 
     PAYMENT_STEPS = [
         MAKE_PAYMENT_STEP,
-        PAYMENT_CONFIRMATION_STEP
     ]
 
     VERIFICATION_STEPS = [
@@ -152,7 +147,6 @@ class PayAndVerifyView(View):
     STEP_TITLES = {
         INTRO_STEP: ugettext_lazy("Intro"),
         MAKE_PAYMENT_STEP: ugettext_lazy("Make payment"),
-        PAYMENT_CONFIRMATION_STEP: ugettext_lazy("Payment confirmation"),
         FACE_PHOTO_STEP: ugettext_lazy("Take photo"),
         ID_PHOTO_STEP: ugettext_lazy("Take a photo of your ID"),
         REVIEW_PHOTOS_STEP: ugettext_lazy("Review your info"),
@@ -171,7 +165,6 @@ class PayAndVerifyView(View):
     VERIFY_NOW_MSG = 'verify-now'
     VERIFY_LATER_MSG = 'verify-later'
     UPGRADE_MSG = 'upgrade'
-    PAYMENT_CONFIRMATION_MSG = 'payment-confirmation'
 
     # Requirements
     #
@@ -405,12 +398,7 @@ class PayAndVerifyView(View):
         verification_good_until = self._verification_valid_until(request.user)
 
         # get available payment processors
-        if relevant_course_mode.sku:
-            # transaction will be conducted via ecommerce service
-            processors = ecommerce_api_client(request.user).payment.processors.get()
-        else:
-            # transaction will be conducted using legacy shopping cart
-            processors = [settings.CC_PROCESSOR_NAME]
+        processors = ecommerce_api_client(request.user).payment.processors.get()
 
         # Render the top-level page
         context = {
@@ -496,9 +484,8 @@ class PayAndVerifyView(View):
         if already_verified and already_paid:
             # If they've already paid and verified, there's nothing else to do,
             # so redirect them to the dashboard.
-            if message != self.PAYMENT_CONFIRMATION_MSG:
-                url = reverse('dashboard')
-        elif message in [self.VERIFY_NOW_MSG, self.VERIFY_LATER_MSG, self.PAYMENT_CONFIRMATION_MSG]:
+            url = reverse('dashboard')
+        elif message in [self.VERIFY_NOW_MSG, self.VERIFY_LATER_MSG]:
             if is_enrolled:
                 # If the user is already enrolled but hasn't yet paid,
                 # then the "upgrade" messaging is more appropriate.
@@ -521,7 +508,7 @@ class PayAndVerifyView(View):
 
         if user_is_trying_to_pay and self._get_user_active_status(user) and not already_paid:
             # If the user is trying to pay, has activated their account, and the ecommerce service
-            # is enabled redirect him to the ecommerce checkout page.
+            # is enabled redirect them to the ecommerce checkout page.
             ecommerce_service = EcommerceService()
             if ecommerce_service.is_enabled(user):
                 url = ecommerce_service.get_checkout_page_url(
@@ -821,7 +808,7 @@ def create_order(request):
         # a stale js client, which expects a response containing only the 'payment_form_data' part of
         # the payment data result.
         payment_data = payment_data['payment_form_data']
-    return HttpResponse(json.dumps(payment_data), content_type="application/json")
+    return JsonResponse(payment_data)
 
 
 class SubmitPhotosView(View):
@@ -1143,7 +1130,6 @@ def results_callback(request):
     elif result == "FAIL":
         log.debug(u"Denying verification for %s", receipt_id)
         attempt.deny(json.dumps(reason), error_code=error_code)
-        status = "denied"
         reverify_url = '{}/id-verification'.format(settings.ACCOUNT_MICROFRONTEND_URL)
         verification_status_email_vars['reasons'] = reason
         verification_status_email_vars['reverify_url'] = reverify_url
@@ -1162,7 +1148,6 @@ def results_callback(request):
     elif result == "SYSTEM FAIL":
         log.debug(u"System failure for %s -- resetting to must_retry", receipt_id)
         attempt.system_error(json.dumps(reason), error_code=error_code)
-        status = "error"
         log.error(u"Software Secure callback attempt for %s failed: %s", receipt_id, reason)
     else:
         log.error(u"Software Secure returned unknown result %s", result)

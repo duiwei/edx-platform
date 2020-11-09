@@ -69,8 +69,8 @@ from model_utils.models import TimeStampedModel
 from opaque_keys.edx.django.models import CourseKeyField
 from simple_history.models import HistoricalRecords
 
-from badges.events.course_complete import course_badge_check
-from badges.events.course_meta import completion_check, course_group_check
+from lms.djangoapps.badges.events.course_complete import course_badge_check
+from lms.djangoapps.badges.events.course_meta import completion_check, course_group_check
 from course_modes.models import CourseMode
 from lms.djangoapps.instructor_task.models import InstructorTask
 from openedx.core.djangoapps.content.course_overviews.models import CourseOverview
@@ -263,9 +263,17 @@ class GeneratedCertificate(models.Model):
     # results. Django requires us to explicitly declare this.
     objects = models.Manager()
 
-    MODES = Choices(u'verified', u'honor', u'audit', u'professional', u'no-id-professional', u'masters')
+    MODES = Choices(
+        'verified',
+        'honor',
+        'audit',
+        'professional',
+        'no-id-professional',
+        'masters',
+        'executive-education'
+    )
 
-    VERIFIED_CERTS_MODES = [CourseMode.VERIFIED, CourseMode.CREDIT_MODE, CourseMode.MASTERS]
+    VERIFIED_CERTS_MODES = [CourseMode.VERIFIED, CourseMode.CREDIT_MODE, CourseMode.MASTERS, CourseMode.EXECUTIVE_EDUCATION]
 
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     course_id = CourseKeyField(max_length=255, blank=True, default=None)

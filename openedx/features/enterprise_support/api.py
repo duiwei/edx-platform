@@ -103,6 +103,13 @@ class ConsentApiClient(object):
         # Call the endpoint with the given kwargs, and check the value that it provides.
         response = self.consent_endpoint.get(**kwargs)
 
+        LOGGER.info(
+            '[ENTERPRISE DSC] Consent Requirement Info. APIParams: [%s], APIResponse: [%s], EnrollmentExists: [%s]',
+            kwargs,
+            response,
+            enrollment_exists,
+        )
+
         # No Enterprise record exists, but we're already enrolled in a course. So, go ahead and proceed.
         if enrollment_exists and not response.get('exists', False):
             return False
@@ -375,8 +382,9 @@ def enterprise_customer_from_cache(uuid):
 
 
 def add_enterprise_customer_to_session(request, enterprise_customer):
-    """ Add the given enterprise_customer data to the request's session. """
-    request.session[ENTERPRISE_CUSTOMER_KEY_NAME] = enterprise_customer
+    """ Add the given enterprise_customer data to the request's session if user is authenticated. """
+    if request.user.is_authenticated:
+        request.session[ENTERPRISE_CUSTOMER_KEY_NAME] = enterprise_customer
 
 
 def enterprise_customer_from_session(request):
@@ -423,6 +431,11 @@ def enterprise_customer_from_api(request):
     """Use an API to get Enterprise Customer data from request context clues."""
     enterprise_customer = None
     enterprise_customer_uuid = enterprise_customer_uuid_for_request(request)
+    if enterprise_customer_uuid is _CACHE_MISS:
+        # enterprise_customer_uuid_for_request() `shouldn't` return a __CACHE_MISS__,
+        # but just in case it does, we check for it and return early if found.
+        return enterprise_customer
+
     if enterprise_customer_uuid:
         # If we were able to obtain an EnterpriseCustomer UUID, go ahead
         # and use it to attempt to retrieve EnterpriseCustomer details
@@ -468,7 +481,10 @@ def enterprise_customer_uuid_for_request(request):
     else:
         enterprise_customer_uuid = _customer_uuid_from_query_param_cookies_or_session(request)
 
-    if enterprise_customer_uuid is _CACHE_MISS and request.user.is_authenticated:
+    if enterprise_customer_uuid is _CACHE_MISS:
+        if not request.user.is_authenticated:
+            return None
+
         # If there's no way to get an Enterprise UUID for the request, check to see
         # if there's already an Enterprise attached to the requesting user on the backend.
         enterprise_customer = None
@@ -525,19 +541,40 @@ def consent_needed_for_course(request, user, course_id, enrollment_exists=False)
     Wrap the enterprise app check to determine if the user needs to grant
     data sharing permissions before accessing a course.
     """
+    LOGGER.info(
+        u"Determining if user [{username}] must consent to data sharing for course [{course_id}]".format(
+            username=user.username,
+            course_id=course_id
+        )
+    )
+
     consent_cache_key = get_data_consent_share_cache_key(user.id, course_id)
     data_sharing_consent_needed_cache = TieredCache.get_cached_response(consent_cache_key)
     if data_sharing_consent_needed_cache.is_found and data_sharing_consent_needed_cache.value == 0:
+        LOGGER.info(
+            u"Consent from user [{username}] is not needed for course [{course_id}]. The DSC cache was checked,"
+            u" and the value was 0.".format(
+                username=user.username,
+                course_id=course_id
+            )
+        )
         return False
 
+    consent_needed = False
     enterprise_learner_details = get_enterprise_learner_data_from_db(user)
     if not enterprise_learner_details:
-        consent_needed = False
+        LOGGER.info(
+            u"Consent from user [{username}] is not needed for course [{course_id}]. The user is not linked to an"
+            u" enterprise.".format(
+                username=user.username,
+                course_id=course_id
+            )
+        )
     else:
         client = ConsentApiClient(user=request.user)
         current_enterprise_uuid = enterprise_customer_uuid_for_request(request)
         consent_needed = any(
-            current_enterprise_uuid == learner['enterprise_customer']['uuid']
+            str(current_enterprise_uuid) == str(learner['enterprise_customer']['uuid'])
             and Site.objects.get(domain=learner['enterprise_customer']['site']['domain']) == request.site
             and client.consent_required(
                 username=user.username,
@@ -547,6 +584,46 @@ def consent_needed_for_course(request, user, course_id, enrollment_exists=False)
             )
             for learner in enterprise_learner_details
         )
+
+        if not consent_needed:
+            enterprises = [str(learner['enterprise_customer']['uuid']) for learner in enterprise_learner_details]
+
+            if str(current_enterprise_uuid) not in enterprises:
+                LOGGER.info(
+                    '[ENTERPRISE DSC] Consent requirement failed due to enterprise mismatch. '
+                    'USER: [%s], CurrentEnterprise: [%s], LearnerEnterprises: [%s]',
+                    user.username,
+                    current_enterprise_uuid,
+                    enterprises
+                )
+            else:
+                domains = [learner['enterprise_customer']['site']['domain'] for learner in enterprise_learner_details]
+                if not Site.objects.filter(domain__in=domains).filter(id=request.site.id).exists():
+                    LOGGER.info(
+                        '[ENTERPRISE DSC] Consent requirement failed due to site mismatch. '
+                        'USER: [%s], RequestSite: [%s], LearnerEnterpriseDomains: [%s]',
+                        user.username,
+                        request.site,
+                        domains
+                    )
+
+        if consent_needed:
+            LOGGER.info(
+                u"Consent from user [{username}] is needed for course [{course_id}]. The user's current enterprise"
+                u" required data sharing consent, and it has not been given.".format(
+                    username=user.username,
+                    course_id=course_id
+                )
+            )
+        else:
+            LOGGER.info(
+                u"Consent from user [{username}] is not needed for course [{course_id}]. The user's current enterprise "
+                u"does not require data sharing consent.".format(
+                    username=user.username,
+                    course_id=course_id
+                )
+            )
+
     if not consent_needed:
         # Set an ephemeral item in the cache to prevent us from needing
         # to make a Consent API request every time this function is called.
@@ -592,6 +669,13 @@ def get_enterprise_consent_url(request, course_id, user=None, return_to=None, en
                  If None, return to request.path instead.
     """
     user = user or request.user
+
+    LOGGER.info(
+        u'Getting enterprise consent url for user [{username}] and course [{course_id}].'.format(
+            username=user.username,
+            course_id=course_id
+        )
+    )
 
     if not consent_needed_for_course(request, user, course_id, enrollment_exists=enrollment_exists):
         return None

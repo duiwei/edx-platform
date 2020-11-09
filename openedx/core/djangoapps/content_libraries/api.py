@@ -56,7 +56,7 @@ from xblock.core import XBlock
 from xblock.exceptions import XBlockNotFoundError
 
 from openedx.core.djangoapps.content_libraries import permissions
-from openedx.core.djangoapps.content_libraries.constants import DRAFT_NAME
+from openedx.core.djangoapps.content_libraries.constants import DRAFT_NAME, COMPLEX
 from openedx.core.djangoapps.content_libraries.library_bundle import LibraryBundle
 from openedx.core.djangoapps.content_libraries.libraries_index import ContentLibraryIndexer, LibraryBlockIndexer
 from openedx.core.djangoapps.content_libraries.models import ContentLibrary, ContentLibraryPermission
@@ -110,6 +110,10 @@ class BlockLimitReachedError(Exception):
     """ Maximum number of allowed XBlocks in the library reached """
 
 
+class IncompatibleTypesError(Exception):
+    """ Library type constraint violated """
+
+
 class InvalidNameError(ValueError):
     """ The specified name/identifier is not valid """
 
@@ -131,6 +135,7 @@ class ContentLibraryMetadata:
     description = attr.ib("")
     num_blocks = attr.ib(0)
     version = attr.ib(0)
+    type = attr.ib(default=COMPLEX)
     last_published = attr.ib(default=None, type=datetime)
     has_unpublished_changes = attr.ib(False)
     # has_unpublished_deletes will be true when the draft version of the library's bundle
@@ -142,6 +147,7 @@ class ContentLibraryMetadata:
     # Allow any user with Studio access to view this library's content in
     # Studio, use it in their courses, and copy content out of this library.
     allow_public_read = attr.ib(False)
+    license = attr.ib("")
 
 
 class AccessLevel:
@@ -224,14 +230,16 @@ class AccessLevel:
     NO_ACCESS = None
 
 
-def get_libraries_for_user(user, org=None):
+def get_libraries_for_user(user, org=None, library_type=None):
     """
     Return content libraries that the user has permission to view.
     """
+    filter_kwargs = {}
     if org:
-        qs = ContentLibrary.objects.filter(org__short_name=org)
-    else:
-        qs = ContentLibrary.objects.all()
+        filter_kwargs['org__short_name'] = org
+    if library_type:
+        filter_kwargs['type'] = library_type
+    qs = ContentLibrary.objects.filter(**filter_kwargs)
     return permissions.perms[permissions.CAN_VIEW_THIS_CONTENT_LIBRARY].filter(user, qs)
 
 
@@ -291,6 +299,7 @@ def get_metadata_from_index(queryset, text_search=None):
             key=lib.library_key,
             bundle_uuid=metadata[i]['uuid'],
             title=metadata[i]['title'],
+            type=lib.type,
             description=metadata[i]['description'],
             version=metadata[i]['version'],
             allow_public_learning=queryset[i].allow_public_learning,
@@ -299,6 +308,7 @@ def get_metadata_from_index(queryset, text_search=None):
             last_published=metadata[i].get('last_published'),
             has_unpublished_changes=metadata[i].get('has_unpublished_changes'),
             has_unpublished_deletes=metadata[i].get('has_unpublished_deletes'),
+            license=lib.license,
         )
         for i, lib in enumerate(queryset)
         if metadata[i] is not None
@@ -340,6 +350,7 @@ def get_library(library_key):
         key=library_key,
         bundle_uuid=ref.bundle_uuid,
         title=bundle_metadata.title,
+        type=ref.type,
         description=bundle_metadata.description,
         num_blocks=num_blocks,
         version=bundle_metadata.latest_version,
@@ -348,10 +359,14 @@ def get_library(library_key):
         allow_public_read=ref.allow_public_read,
         has_unpublished_changes=has_unpublished_changes,
         has_unpublished_deletes=has_unpublished_deletes,
+        license=ref.license,
     )
 
 
-def create_library(collection_uuid, org, slug, title, description, allow_public_learning, allow_public_read):
+def create_library(
+        collection_uuid, library_type, org, slug, title, description, allow_public_learning, allow_public_read,
+        library_license,
+):
     """
     Create a new content library.
 
@@ -384,9 +399,11 @@ def create_library(collection_uuid, org, slug, title, description, allow_public_
         ref = ContentLibrary.objects.create(
             org=org,
             slug=slug,
+            type=library_type,
             bundle_uuid=bundle.uuid,
             allow_public_learning=allow_public_learning,
             allow_public_read=allow_public_read,
+            license=library_license,
         )
     except IntegrityError:
         delete_bundle(bundle.uuid)
@@ -396,12 +413,14 @@ def create_library(collection_uuid, org, slug, title, description, allow_public_
         key=ref.library_key,
         bundle_uuid=bundle.uuid,
         title=title,
+        type=library_type,
         description=description,
         num_blocks=0,
         version=0,
         last_published=None,
         allow_public_learning=ref.allow_public_learning,
         allow_public_read=ref.allow_public_read,
+        license=library_license,
     )
 
 
@@ -471,19 +490,22 @@ def set_library_group_permissions(library_key, group, access_level):
 
 
 def update_library(
-    library_key,
-    title=None,
-    description=None,
-    allow_public_learning=None,
-    allow_public_read=None,
+        library_key,
+        title=None,
+        description=None,
+        allow_public_learning=None,
+        allow_public_read=None,
+        library_type=None,
+        library_license=None,
 ):
     """
-    Update a library's title or description.
+    Update a library's metadata
     (Slug cannot be changed as it would break IDs throughout the system.)
 
     A value of None means "don't change".
     """
     ref = ContentLibrary.objects.get_by_key(library_key)
+
     # Update MySQL model:
     changed = False
     if allow_public_learning is not None:
@@ -491,6 +513,34 @@ def update_library(
         changed = True
     if allow_public_read is not None:
         ref.allow_public_read = allow_public_read
+        changed = True
+    if library_type is not None:
+        if library_type not in (COMPLEX, ref.type):
+            lib_bundle = LibraryBundle(library_key, ref.bundle_uuid, draft_name=DRAFT_NAME)
+            (has_unpublished_changes, has_unpublished_deletes) = lib_bundle.has_changes()
+            if has_unpublished_changes or has_unpublished_deletes:
+                raise IncompatibleTypesError(
+                    _(
+                        'You may not change a library\'s type to {library_type} if it still has unpublished changes.'
+                    ).format(library_type=library_type)
+                )
+            for block in get_library_blocks(library_key):
+                if block.usage_key.block_type != library_type:
+                    raise IncompatibleTypesError(
+                        _(
+                            'You can only set a library to {library_type} if all existing blocks are of that type. '
+                            'Found incompatible block {block_id} with type {block_type}.'
+                        ).format(
+                            library_type=library_type,
+                            block_type=block.usage_key.block_type,
+                            block_id=block.usage_key.block_id,
+                        ),
+                    )
+        ref.type = library_type
+
+        changed = True
+    if library_license is not None:
+        ref.license = library_license
         changed = True
     if changed:
         ref.save()
@@ -531,7 +581,7 @@ def delete_library(library_key):
         raise
 
 
-def get_library_blocks(library_key, text_search=None):
+def get_library_blocks(library_key, text_search=None, block_types=None):
     """
     Get the list of top-level XBlocks in the specified library.
 
@@ -544,6 +594,8 @@ def get_library_blocks(library_key, text_search=None):
                 'library_key': [str(library_key)],
                 'is_child': [False],
             }
+            if block_types:
+                filter_terms['block_type'] = block_types
             metadata = [
                 {
                     **item,
@@ -552,7 +604,7 @@ def get_library_blocks(library_key, text_search=None):
                 for item in LibraryBlockIndexer.get_items(filter_terms=filter_terms, text_search=text_search)
                 if item is not None
             ]
-        except (ElasticConnectionError) as e:
+        except ElasticConnectionError as e:
             log.exception(e)
 
     # If indexing is disabled, or connection to elastic failed
@@ -568,9 +620,11 @@ def get_library_blocks(library_key, text_search=None):
             # have only a single usage in the library, which is part of the definition of top level block.
             def_key = lib_bundle.definition_for_usage(usage_key)
             display_name = get_block_display_name(def_key)
-            if (text_search is None or
-                    text_search.lower() in display_name.lower() or
-                    text_search.lower() in str(usage_key).lower()):
+            text_match = (text_search is None or
+                          text_search.lower() in display_name.lower() or
+                          text_search.lower() in str(usage_key).lower())
+            type_match = (block_types is None or usage_key.block_type in block_types)
+            if text_match and type_match:
                 metadata.append({
                     "id": usage_key,
                     "def_key": def_key,
@@ -668,6 +722,13 @@ def create_library_block(library_key, block_type, definition_id):
     """
     assert isinstance(library_key, LibraryLocatorV2)
     ref = ContentLibrary.objects.get_by_key(library_key)
+    if ref.type != COMPLEX:
+        if block_type != ref.type:
+            raise IncompatibleTypesError(
+                _('Block type "{block_type}" is not compatible with library type "{library_type}".').format(
+                    block_type=block_type, library_type=ref.type,
+                )
+            )
     lib_bundle = LibraryBundle(library_key, ref.bundle_uuid, draft_name=DRAFT_NAME)
     # Total number of blocks should not exceed the maximum allowed
     total_blocks = len(lib_bundle.get_top_level_usages())
@@ -852,8 +913,7 @@ def delete_library_block_static_asset_file(usage_key, file_name):
 def get_allowed_block_types(library_key):  # pylint: disable=unused-argument
     """
     Get a list of XBlock types that can be added to the specified content
-    library. For now, the result is the same regardless of which library is
-    specified, but that may change in the future.
+    library.
     """
     # This import breaks in the LMS so keep it here. The LMS doesn't generally
     # use content libraries APIs directly but some tests may want to use them to
@@ -862,6 +922,10 @@ def get_allowed_block_types(library_key):  # pylint: disable=unused-argument
     # TODO: return support status and template options
     # See cms/djangoapps/contentstore/views/component.py
     block_types = sorted(name for name, class_ in XBlock.load_classes())
+    lib = get_library(library_key)
+    if lib.type != COMPLEX:
+        # Problem and Video libraries only permit XBlocks of the same name.
+        block_types = (name for name in block_types if name == lib.type)
     info = []
     for block_type in block_types:
         display_name = xblock_type_display_name(block_type, None)

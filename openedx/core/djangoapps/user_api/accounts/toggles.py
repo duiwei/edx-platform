@@ -2,10 +2,8 @@
 Toggles for accounts related code.
 """
 
-from django.conf import settings
-
+from edx_toggles.toggles import WaffleFlag
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
-from openedx.core.djangoapps.waffle_utils import WaffleFlag
 
 # .. toggle_name: order_history.redirect_to_microfrontend
 # .. toggle_implementation: WaffleFlag
@@ -43,11 +41,4 @@ def should_redirect_to_account_microfrontend():
     return (
         configuration_helpers.get_value('ENABLE_ACCOUNT_MICROFRONTEND') and
         REDIRECT_TO_ACCOUNT_MICROFRONTEND.is_enabled()
-    )
-
-
-def should_redirect_to_logistration_mircrofrontend():
-    return (
-        should_redirect_to_account_microfrontend() and
-        settings.FEATURES.get('ENABLE_LOGISTRATION_MICROFRONTEND')
     )

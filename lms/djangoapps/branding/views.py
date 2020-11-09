@@ -16,7 +16,7 @@ from django.utils.translation.trans_real import get_supported_language_variant
 from django.views.decorators.cache import cache_control
 from django.views.decorators.csrf import ensure_csrf_cookie
 
-import branding.api as branding_api
+import lms.djangoapps.branding.api as branding_api
 import lms.djangoapps.courseware.views.views as courseware_views
 import student.views
 from edxmako.shortcuts import marketing_link, render_to_response
@@ -37,7 +37,7 @@ def index(request):
     """
     if request.user.is_authenticated:
         # Only redirect to dashboard if user has
-        # courses in his/her dashboard. Otherwise UX is a bit cryptic.
+        # courses in their dashboard. Otherwise UX is a bit cryptic.
         # In this case, we want to have the user stay on a course catalog
         # page to make it easier to browse for courses (and register)
         if configuration_helpers.get_value(
@@ -215,7 +215,7 @@ def footer(request):
                 # ...
             ],
             "openedx_link": {
-                "url": "http://open.edx.org",
+                "url": "https://open.edx.org",
                 "title": "Powered by Open edX",
                 "image": "http://example.com/openedx.png"
             },

@@ -19,9 +19,7 @@ from django.test.client import Client, RequestFactory
 from django.test.utils import override_settings
 from django.urls import reverse
 from django.utils.timezone import now
-from django.utils.translation import ugettext as _
 from mock import Mock, patch
-from opaque_keys.edx.keys import CourseKey
 from opaque_keys.edx.locator import CourseLocator
 from six.moves import zip
 from waffle.testutils import override_switch
@@ -31,6 +29,7 @@ from course_modes.models import CourseMode
 from course_modes.tests.factories import CourseModeFactory
 from lms.djangoapps.commerce.models import CommerceConfiguration
 from lms.djangoapps.commerce.tests import TEST_API_URL, TEST_PAYMENT_DATA, TEST_PUBLIC_URL_ROOT
+from lms.djangoapps.commerce.tests.mocks import mock_payment_processors
 from lms.djangoapps.commerce.utils import EcommerceService
 from lms.djangoapps.verify_student.models import SoftwareSecurePhotoVerification, VerificationDeadline
 from lms.djangoapps.verify_student.views import PayAndVerifyView, checkout_with_ecommerce_service, render_to_response
@@ -40,7 +39,7 @@ from openedx.core.djangoapps.user_api.accounts.api import get_account_settings
 from student.models import CourseEnrollment
 from student.tests.factories import CourseEnrollmentFactory, UserFactory
 from util.testing import UrlResetMixin
-from verify_student.tests import TestVerificationBase
+from lms.djangoapps.verify_student.tests import TestVerificationBase
 from xmodule.modulestore import ModuleStoreEnum
 from xmodule.modulestore.django import modulestore
 from xmodule.modulestore.tests.django_utils import ModuleStoreTestCase
@@ -54,6 +53,20 @@ def mock_render_to_response(*args, **kwargs):
 render_mock = Mock(side_effect=mock_render_to_response)
 
 PAYMENT_DATA_KEYS = {'payment_processor_name', 'payment_page_url', 'payment_form_data'}
+
+
+def _mock_payment_processors():
+    """
+    Mock out the payment processors endpoint, since we don't run ecommerce for unit tests here.
+    Used in tests where ``mock_payment_processors`` can't be easily used, for example the whole
+    test is an httpretty context or the mock may or may not be called depending on ddt parameters.
+    """
+    httpretty.register_uri(
+        httpretty.GET,
+        "{}/payment/processors/".format(TEST_API_URL),
+        body=json.dumps(['foo', 'bar']),
+        content_type="application/json",
+    )
 
 
 class StartView(TestCase):
@@ -87,12 +100,8 @@ class TestPayAndVerifyView(UrlResetMixin, ModuleStoreTestCase, XssTestMixin, Tes
     PASSWORD = "test_password"
 
     NOW = now()
-    YESTERDAY = 'yesterday'
-    TOMORROW = 'tomorrow'
     NEXT_YEAR = 'next_year'
     DATES = {
-        YESTERDAY: NOW - timedelta(days=1),
-        TOMORROW: NOW + timedelta(days=1),
         NEXT_YEAR: NOW + timedelta(days=360),
         None: None,
     }
@@ -139,12 +148,7 @@ class TestPayAndVerifyView(UrlResetMixin, ModuleStoreTestCase, XssTestMixin, Tes
         """Verify user gets redirected to ecommerce checkout when ecommerce checkout is enabled."""
         sku = 'TESTSKU'
         # When passing a SKU ecommerce api gets called.
-        httpretty.register_uri(
-            httpretty.GET,
-            "{}/payment/processors/".format(TEST_API_URL),
-            body=json.dumps(['foo', 'bar']),
-            content_type="application/json",
-        )
+        _mock_payment_processors()
         configuration = CommerceConfiguration.objects.create(checkout_on_ecommerce_service=True)
         checkout_page = configuration.basket_checkout_page
         checkout_page += "?utm_source=test"
@@ -372,60 +376,23 @@ class TestPayAndVerifyView(UrlResetMixin, ModuleStoreTestCase, XssTestMixin, Tes
         response = self._get_page('verify_student_verify_now', course.id)
         self._assert_user_details(response, self.user.profile.name)
 
-    @ddt.data(
-        "verify_student_verify_now",
-        "verify_student_payment_confirmation"
-    )
-    def test_verify_now_not_enrolled(self, page_name):
+    def test_verify_now_not_enrolled(self):
         course = self._create_course("verified")
-        response = self._get_page(page_name, course.id, expected_status_code=302)
+        response = self._get_page("verify_student_verify_now", course.id, expected_status_code=302)
         self._assert_redirects_to_start_flow(response, course.id)
 
-    @ddt.data(
-        "verify_student_verify_now",
-        "verify_student_payment_confirmation"
-    )
-    def test_verify_now_unenrolled(self, page_name):
+    def test_verify_now_unenrolled(self):
         course = self._create_course("verified")
         self._enroll(course.id, "verified")
         self._unenroll(course.id)
-        response = self._get_page(page_name, course.id, expected_status_code=302)
+        response = self._get_page("verify_student_verify_now", course.id, expected_status_code=302)
         self._assert_redirects_to_start_flow(response, course.id)
 
-    @ddt.data(
-        "verify_student_verify_now",
-        "verify_student_payment_confirmation"
-    )
-    def test_verify_now_not_paid(self, page_name):
+    def test_verify_now_not_paid(self):
         course = self._create_course("verified")
         self._enroll(course.id)
-        response = self._get_page(page_name, course.id, expected_status_code=302)
+        response = self._get_page("verify_student_verify_now", course.id, expected_status_code=302)
         self._assert_redirects_to_upgrade(response, course.id)
-
-    def test_payment_confirmation(self):
-        course = self._create_course("verified")
-        self._enroll(course.id, "verified")
-        response = self._get_page('verify_student_payment_confirmation', course.id)
-
-        self._assert_messaging(response, PayAndVerifyView.PAYMENT_CONFIRMATION_MSG)
-
-        self.assert_no_xss(response, '<script>alert("XSS")</script>')
-
-        # Expect that *all* steps are displayed,
-        # but we start at the payment confirmation step
-        self._assert_steps_displayed(
-            response,
-            PayAndVerifyView.PAYMENT_STEPS + PayAndVerifyView.VERIFICATION_STEPS,
-            PayAndVerifyView.PAYMENT_CONFIRMATION_STEP,
-        )
-
-        # These will be hidden from the user anyway since they're starting
-        # after the payment step.  We're already including the payment
-        # steps, so it's easier to include these as well.
-        self._assert_requirements_displayed(response, [
-            PayAndVerifyView.PHOTO_ID_REQ,
-            PayAndVerifyView.WEBCAM_REQ,
-        ])
 
     @ddt.data("verify_student_start_flow", "verify_student_begin_flow")
     def test_payment_cannot_skip(self, payment_flow):
@@ -452,64 +419,6 @@ class TestPayAndVerifyView(UrlResetMixin, ModuleStoreTestCase, XssTestMixin, Tes
             response,
             PayAndVerifyView.PAYMENT_STEPS + PayAndVerifyView.VERIFICATION_STEPS,
             PayAndVerifyView.MAKE_PAYMENT_STEP,
-        )
-
-    def test_payment_confirmation_already_verified(self):
-        course = self._create_course("verified")
-        self._enroll(course.id, "verified")
-        self._set_verification_status("submitted")
-
-        response = self._get_page('verify_student_payment_confirmation', course.id)
-
-        # Other pages would redirect to the dashboard at this point,
-        # because the user has paid and verified.  However, we want
-        # the user to see the confirmation page even if there
-        # isn't anything for them to do here except return
-        # to the dashboard.
-        self._assert_steps_displayed(
-            response,
-            PayAndVerifyView.PAYMENT_STEPS,
-            PayAndVerifyView.PAYMENT_CONFIRMATION_STEP,
-        )
-
-    def test_payment_confirmation_already_verified_skip_first_step(self):
-        course = self._create_course("verified")
-        self._enroll(course.id, "verified")
-        self._set_verification_status("submitted")
-
-        response = self._get_page(
-            'verify_student_payment_confirmation',
-            course.id,
-            skip_first_step=True
-        )
-
-        # There are no other steps, so stay on the
-        # payment confirmation step
-        self._assert_steps_displayed(
-            response,
-            PayAndVerifyView.PAYMENT_STEPS,
-            PayAndVerifyView.PAYMENT_CONFIRMATION_STEP,
-        )
-
-    @ddt.data(
-        (YESTERDAY, True),
-        (TOMORROW, False)
-    )
-    @ddt.unpack
-    def test_payment_confirmation_course_details(self, course_start, show_courseware_url):
-        course = self._create_course("verified", course_start=self.DATES[course_start])
-        self._enroll(course.id, "verified")
-        response = self._get_page('verify_student_payment_confirmation', course.id)
-
-        courseware_url = (
-            reverse("course_root", kwargs={'course_id': six.text_type(course.id)})
-            if show_courseware_url else ""
-        )
-        self._assert_course_details(
-            response,
-            six.text_type(course.id),
-            course.display_name,
-            courseware_url
         )
 
     @ddt.data("verified", "professional")
@@ -941,15 +850,24 @@ class TestPayAndVerifyView(UrlResetMixin, ModuleStoreTestCase, XssTestMixin, Tes
         }
         session.save()
 
-    def _get_page(self, url_name, course_key, expected_status_code=200, skip_first_step=False):
+    @httpretty.activate
+    @override_settings(ECOMMERCE_API_URL=TEST_API_URL)
+    def _get_page(self, url_name, course_key, expected_status_code=200, skip_first_step=False, assert_headers=False):
         """Retrieve one of the verification pages. """
         url = reverse(url_name, kwargs={"course_id": six.text_type(course_key)})
 
         if skip_first_step:
             url += "?skip-first-step=1"
 
+        _mock_payment_processors()
         response = self.client.get(url)
         self.assertEqual(response.status_code, expected_status_code)
+
+        if assert_headers:
+            # ensure the mock api call was made.  NOTE: the following line
+            # approximates the check - if the headers were empty it means
+            # there was no last request.
+            self.assertNotEqual(httpretty.last_request().headers, {})
         return response
 
     def _assert_displayed_mode(self, response, expected_mode):
@@ -1036,17 +954,20 @@ class TestPayAndVerifyView(UrlResetMixin, ModuleStoreTestCase, XssTestMixin, Tes
     def _assert_redirects_to_start_flow(self, response, course_id):
         """Check that the page redirects to the start of the payment/verification flow. """
         url = reverse('verify_student_start_flow', kwargs={'course_id': six.text_type(course_id)})
-        self.assertRedirects(response, url)
+        with mock_payment_processors():
+            self.assertRedirects(response, url)
 
     def _assert_redirects_to_verify_start(self, response, course_id, status_code=302):
         """Check that the page redirects to the "verify later" part of the flow. """
         url = reverse('verify_student_verify_now', kwargs={'course_id': six.text_type(course_id)})
-        self.assertRedirects(response, url, status_code)
+        with mock_payment_processors():
+            self.assertRedirects(response, url, status_code)
 
     def _assert_redirects_to_upgrade(self, response, course_id):
         """Check that the page redirects to the "upgrade" part of the flow. """
         url = reverse('verify_student_upgrade_and_verify', kwargs={'course_id': six.text_type(course_id)})
-        self.assertRedirects(response, url)
+        with mock_payment_processors():
+            self.assertRedirects(response, url)
 
     @ddt.data("verify_student_start_flow", "verify_student_begin_flow")
     def test_course_upgrade_page_with_unicode_and_special_values_in_display_name(self, payment_flow):
@@ -1067,8 +988,6 @@ class TestPayAndVerifyView(UrlResetMixin, ModuleStoreTestCase, XssTestMixin, Tes
 
         self.assertEqual(response_dict['course_name'], mode_display_name)
 
-    @httpretty.activate
-    @override_settings(ECOMMERCE_API_URL=TEST_API_URL)
     @ddt.data("verify_student_start_flow", "verify_student_begin_flow")
     def test_processors_api(self, payment_flow):
         """
@@ -1081,27 +1000,15 @@ class TestPayAndVerifyView(UrlResetMixin, ModuleStoreTestCase, XssTestMixin, Tes
         course = self._create_course("verified", sku='nonempty-sku')
         self._enroll(course.id)
 
-        # mock out the payment processors endpoint
-        httpretty.register_uri(
-            httpretty.GET,
-            "{}/payment/processors/".format(TEST_API_URL),
-            body=json.dumps(['foo', 'bar']),
-            content_type="application/json",
-        )
         # make the server request
-        response = self._get_page(payment_flow, course.id)
+        response = self._get_page(payment_flow, course.id, assert_headers=True)
         self.assertEqual(response.status_code, 200)
-
-        # ensure the mock api call was made.  NOTE: the following line
-        # approximates the check - if the headers were empty it means
-        # there was no last request.
-        self.assertNotEqual(httpretty.last_request().headers, {})
 
 
 class CheckoutTestMixin(object):
     """
     Mixin implementing test methods that should behave identically regardless
-    of which backend is used (shoppingcart or ecommerce service).  Subclasses
+    of which backend is used (currently only the ecommerce service).  Subclasses
     immediately follow for each backend, which inherit from TestCase and
     define methods needed to customize test parameters, and patch the
     appropriate checkout method.
@@ -1635,7 +1542,7 @@ class TestPhotoVerificationResultsCallback(ModuleStoreTestCase, TestVerification
     )
     @patch('lms.djangoapps.verify_student.views.log.error')
     @patch('sailthru.sailthru_client.SailthruClient.send')
-    def test_passed_status_template(self, mock_sailthru_send, mock_log_error):
+    def test_passed_status_template(self, _mock_sailthru_send, _mock_log_error):
         """
         Test for verification passed.
         """
@@ -1710,7 +1617,7 @@ class TestPhotoVerificationResultsCallback(ModuleStoreTestCase, TestVerification
     )
     @patch('lms.djangoapps.verify_student.views.log.error')
     @patch('sailthru.sailthru_client.SailthruClient.send')
-    def test_failed_status_template(self, mock_sailthru_send, mock_log_error):
+    def test_failed_status_template(self, _mock_sailthru_send, _mock_log_error):
         """
         Test for failed verification.
         """
@@ -1837,7 +1744,7 @@ class TestReverifyView(TestVerificationBase):
         """
 
         # User has submitted a verification attempt, but Software Secure has not yet responded
-        attempt = self.create_and_submit_attempt_for_user(self.user)
+        self.create_and_submit_attempt_for_user(self.user)
 
         # Can re-verify because an attempt has already been submitted.
         self._assert_can_reverify()

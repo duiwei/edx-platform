@@ -23,6 +23,7 @@ from django.urls import reverse
 from django.utils.translation import ugettext as _
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_GET, require_http_methods
+from edx_toggles.toggles import WaffleSwitchNamespace
 from milestones import api as milestones_api
 from opaque_keys import InvalidKeyError
 from opaque_keys.edx.keys import CourseKey
@@ -30,42 +31,19 @@ from opaque_keys.edx.locator import BlockUsageLocator
 from six import text_type
 from six.moves import filter
 
-from contentstore.course_group_config import (
-    COHORT_SCHEME,
-    ENROLLMENT_SCHEME,
-    RANDOM_SCHEME,
-    GroupConfiguration,
-    GroupConfigurationsValidationError
-)
-from contentstore.course_info_model import delete_course_update, get_course_updates, update_course_updates
-from contentstore.courseware_index import CoursewareSearchIndexer, SearchIndexingError
-from contentstore.tasks import rerun_course as rerun_course_task
-from contentstore.utils import (
-    add_instructor,
-    get_lms_link_for_item,
-    get_proctored_exam_settings_url,
-    initialize_permissions,
-    remove_all_instructors,
-    reverse_course_url,
-    reverse_library_url,
-    reverse_url,
-    reverse_usage_url
-)
-from contentstore.views.entrance_exam import create_entrance_exam, delete_entrance_exam, update_entrance_exam
+from cms.djangoapps.course_creators.views import add_user_with_status_unrequested, get_course_creator_status
+from cms.djangoapps.models.settings.course_grading import CourseGradingModel
+from cms.djangoapps.models.settings.course_metadata import CourseMetadata
+from cms.djangoapps.models.settings.encoder import CourseSettingsEncoder
 from course_action_state.managers import CourseActionStateItemNotFoundError
 from course_action_state.models import CourseRerunState, CourseRerunUIStateManager
-from course_creators.views import add_user_with_status_unrequested, get_course_creator_status
 from course_modes.models import CourseMode
 from edxmako.shortcuts import render_to_response
-from models.settings.course_grading import CourseGradingModel
-from models.settings.course_metadata import CourseMetadata
-from models.settings.encoder import CourseSettingsEncoder
 from openedx.core.djangoapps.content.course_overviews.models import CourseOverview
 from openedx.core.djangoapps.credit.api import get_credit_requirements, is_credit_course
 from openedx.core.djangoapps.credit.tasks import update_credit_course_requirements
 from openedx.core.djangoapps.models.course_details import CourseDetails
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
-from openedx.core.djangoapps.waffle_utils import WaffleSwitchNamespace
 from openedx.core.djangolib.js_utils import dump_js_escaped_json
 from openedx.core.lib.course_tabs import CourseTabPluginManager
 from openedx.core.lib.courses import course_image_url
@@ -80,7 +58,6 @@ from util.course import get_link_for_about_page
 from util.date_utils import get_default_time_display
 from util.json_request import JsonResponse, JsonResponseBadRequest, expect_json
 from util.milestones_helpers import (
-    is_entrance_exams_enabled,
     is_prerequisite_courses_enabled,
     is_valid_course_key,
     remove_prerequisite_course,
@@ -88,6 +65,7 @@ from util.milestones_helpers import (
 )
 from util.organizations_helpers import add_organization_course, get_organization_by_short_name, organizations_enabled
 from util.string_utils import _has_non_ascii_characters
+from openedx.core import toggles as core_toggles
 from xblock_django.api import deprecated_xblocks
 from xmodule.contentstore.content import StaticContent
 from xmodule.course_module import DEFAULT_START_DATE, CourseFields
@@ -98,13 +76,35 @@ from xmodule.modulestore.exceptions import DuplicateCourseError, ItemNotFoundErr
 from xmodule.partitions.partitions import UserPartition
 from xmodule.tabs import CourseTab, CourseTabList, InvalidTabsException
 
+from ..course_group_config import (
+    COHORT_SCHEME,
+    ENROLLMENT_SCHEME,
+    RANDOM_SCHEME,
+    GroupConfiguration,
+    GroupConfigurationsValidationError
+)
+from ..course_info_model import delete_course_update, get_course_updates, update_course_updates
+from ..courseware_index import CoursewareSearchIndexer, SearchIndexingError
+from ..tasks import rerun_course as rerun_course_task
+from ..utils import (
+    add_instructor,
+    get_lms_link_for_item,
+    get_proctored_exam_settings_url,
+    initialize_permissions,
+    remove_all_instructors,
+    reverse_course_url,
+    reverse_library_url,
+    reverse_url,
+    reverse_usage_url
+)
 from .component import ADVANCED_COMPONENT_TYPES
+from .entrance_exam import create_entrance_exam, delete_entrance_exam, update_entrance_exam
 from .item import create_xblock_info
 from .library import (
-    LIBRARY_AUTHORING_MICROFRONTEND_URL,
     LIBRARIES_ENABLED,
+    LIBRARY_AUTHORING_MICROFRONTEND_URL,
     get_library_creator_status,
-    should_redirect_to_library_authoring_mfe,
+    should_redirect_to_library_authoring_mfe
 )
 
 log = logging.getLogger(__name__)
@@ -1121,7 +1121,7 @@ def settings_handler(request, course_key_string):
                 'show_min_grade_warning': False,
                 'enrollment_end_editable': enrollment_end_editable,
                 'is_prerequisite_courses_enabled': is_prerequisite_courses_enabled(),
-                'is_entrance_exams_enabled': is_entrance_exams_enabled(),
+                'is_entrance_exams_enabled': core_toggles.ENTRANCE_EXAMS.is_enabled(),
                 'enable_extended_course_details': enable_extended_course_details,
                 'upgrade_deadline': upgrade_deadline,
                 'course_authoring_microfrontend_url': course_authoring_microfrontend_url,
@@ -1183,7 +1183,7 @@ def settings_handler(request, course_key_string):
                 # feature-specific settings and handle them accordingly
                 # We have to be careful that we're only executing the following logic if we actually
                 # need to create or delete an entrance exam from the specified course
-                if is_entrance_exams_enabled():
+                if core_toggles.ENTRANCE_EXAMS.is_enabled():
                     course_entrance_exam_present = course_module.entrance_exam_enabled
                     entrance_exam_enabled = request.json.get('entrance_exam_enabled', '') == 'true'
                     ee_min_score_pct = request.json.get('entrance_exam_minimum_score_pct', None)

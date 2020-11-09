@@ -21,12 +21,11 @@ from django.utils.translation import get_language
 from django.utils.translation import ugettext as _
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.decorators.debug import sensitive_post_parameters
-from ipware.ip import get_ip
+from edx_toggles.toggles import WaffleFlag, WaffleFlagNamespace
 from pytz import UTC
 from ratelimit.decorators import ratelimit
 from requests import HTTPError
 from rest_framework.response import Response
-from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from six import text_type
 from social_core.exceptions import AuthAlreadyAssociated, AuthException
@@ -35,6 +34,7 @@ from social_django import utils as social_utils
 import third_party_auth
 # Note that this lives in LMS, so this dependency should be refactored.
 # TODO Have the discussions code subscribe to the REGISTER_USER signal instead.
+from common.djangoapps.student.helpers import get_next_url_for_login_page
 from lms.djangoapps.discussion.notification_prefs.views import enable_notifications
 from openedx.core.djangoapps.lang_pref import LANGUAGE_KEY
 from openedx.core.djangoapps.site_configuration import helpers as configuration_helpers
@@ -57,7 +57,6 @@ from openedx.core.djangoapps.user_authn.views.registration_form import (
     RegistrationFormFactory,
     get_registration_extension_form
 )
-from openedx.core.djangoapps.waffle_utils import WaffleFlag, WaffleFlagNamespace
 from student.helpers import (
     AccountValidationError,
     authenticate_new_user,
@@ -97,13 +96,14 @@ REGISTER_USER = Signal(providing_args=["user", "registration"])
 
 
 # .. toggle_name: registration.enable_failure_logging
-# .. toggle_type: flag
+# .. toggle_implementation: WaffleFlag
 # .. toggle_default: False
 # .. toggle_description: Enable verbose logging of registration failure messages
 # .. toggle_use_cases: temporary
 # .. toggle_creation_date: 2020-04-30
 # .. toggle_target_removal_date: 2020-06-01
 # .. toggle_warnings: This temporary feature toggle does not have a target removal date.
+# .. toggle_tickets: None
 REGISTRATION_FAILURE_LOGGING_FLAG = WaffleFlag(
     waffle_namespace=WaffleFlagNamespace(name=u'registration'),
     flag_name=u'enable_failure_logging',
@@ -493,7 +493,8 @@ class RegistrationView(APIView):
         if response:
             return response
 
-        response = self._create_response(request, {}, status_code=200)
+        redirect_url = get_next_url_for_login_page(request, include_host=True)
+        response = self._create_response(request, {}, status_code=200, redirect_url=redirect_url)
         set_logged_in_cookies(request, response, user)
         return response
 
@@ -547,13 +548,14 @@ class RegistrationView(APIView):
 
         return response, user
 
-    def _create_response(self, request, response_dict, status_code):
+    def _create_response(self, request, response_dict, status_code, redirect_url=None):
         if status_code == 200:
             # keeping this `success` field in for now, as we have outstanding clients expecting this
             response_dict['success'] = True
         else:
             self._log_validation_errors(request, response_dict, status_code)
-
+        if redirect_url:
+            response_dict['redirect_url'] = redirect_url
         return JsonResponse(response_dict, status=status_code)
 
     def _log_validation_errors(self, request, errors, status_code):
